@@ -32,6 +32,9 @@ public final class CredentialProvider extends ContentProvider {
     private ProtocolCaptureStore captureStore;
     private String captureError = "";
     private String pendingToken = "";
+    private long importHookOnlineAt;
+    private String importHookMode = "";
+    private String importSeenNonce = "";
 
     @Override public boolean onCreate() {
         store = new BindingStore(getContext());
@@ -64,8 +67,11 @@ public final class CredentialProvider extends ContentProvider {
                     window.open(address, SystemClock.elapsedRealtime());
                     diagnosticWindow.open(address, SystemClock.elapsedRealtime());
                     diagnosticWrites = 0;
+                    importSeenNonce = "";
                     closeCapture();
-                    yield result("IMPORT_WINDOW_OPEN");
+                    Bundle opened = result("IMPORT_WINDOW_OPEN");
+                    decorateImportStatus(opened, true);
+                    yield opened;
                 }
                 case "closeWindow" -> {
                     requireSelf(self);
@@ -73,13 +79,26 @@ public final class CredentialProvider extends ContentProvider {
                     diagnosticWindow.close();
                     closeCapture();
                     pendingToken = "";
+                    importSeenNonce = "";
                     yield result("IMPORT_WINDOW_CLOSED");
+                }
+                case "importHookOnline" -> {
+                    if (self) throw new SecurityException("MI_CALLER_REQUIRED");
+                    String mode = extras == null ? "" : extras.getString("mode", "");
+                    if (mode.length() > 64) mode = mode.substring(0, 64);
+                    importHookMode = mode;
+                    importHookOnlineAt = SystemClock.elapsedRealtime();
+                    yield result("IMPORT_HOOK_ONLINE");
                 }
                 case "getImportRequest" -> {
                     Bundle request = result(open ? "IMPORT_WINDOW_OPEN" : "IMPORT_WINDOW_CLOSED");
                     if (open) {
                         request.putString("address", window.address());
                         request.putString("nonce", window.nonce());
+                        if (!self && !window.nonce().equals(importSeenNonce)) {
+                            importSeenNonce = window.nonce();
+                            getContext().getContentResolver().notifyChange(URI, null);
+                        }
                     }
                     yield request;
                 }
@@ -165,6 +184,7 @@ public final class CredentialProvider extends ContentProvider {
                     Bundle status = result(open ? "IMPORT_WINDOW_OPEN"
                             : saved == null ? "UNPROVISIONED"
                             : ready ? "BINDING_SAVED" : "BINDING_INCOMPLETE");
+                    decorateImportStatus(status, open);
                     if (saved != null) {
                         TransportObservation.applyToBinding(saved, observation);
                         for (String field : new String[]{"address", "model", "productId", "firmware"}) {
@@ -191,6 +211,15 @@ public final class CredentialProvider extends ContentProvider {
             closeCapture();
             return result("CREDENTIAL_STORAGE_FAILED");
         }
+    }
+
+    private void decorateImportStatus(Bundle out, boolean open) {
+        long age = importHookOnlineAt == 0 ? Long.MAX_VALUE
+                : SystemClock.elapsedRealtime() - importHookOnlineAt;
+        out.putBoolean("importHookOnline", age >= 0 && age < 10 * 60_000L);
+        out.putBoolean("importHookSeen", open && window.nonce() != null
+                && window.nonce().equals(importSeenNonce));
+        out.putString("importHookMode", importHookMode);
     }
 
     private void closeCapture() {
