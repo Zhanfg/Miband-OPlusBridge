@@ -4,8 +4,6 @@ package io.github.miam1ku.mibandoplusbridge.hook;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Process;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 import java.util.Locale;
 
 /** Logs the health login jump and the crash that restarts the process. No account ids or tokens. */
