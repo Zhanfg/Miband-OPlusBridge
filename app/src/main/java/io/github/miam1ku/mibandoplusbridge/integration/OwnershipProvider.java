@@ -23,17 +23,21 @@ public final class OwnershipProvider extends ContentProvider {
     @Override public Bundle call(String method, String arg, Bundle extras) {
         boolean self = Binder.getCallingUid() == Process.myUid();
         if (!self) HostIdentity.requireMiCaller(getContext());
-        if (!"state".equals(method) && !"hookOnline".equals(method)) {
+        if (!"state".equals(method) && !"hookOnline".equals(method) && !"hookAck".equals(method)) {
             throw new SecurityException("OWNERSHIP_OPERATION_UNSUPPORTED");
         }
-        if ("hookOnline".equals(method) && !self) {
-            int api = extras == null ? 0 : extras.getInt("api", 0);
-            long version = extras == null ? 0 : extras.getLong("versionCode", 0);
-            getContext().getSharedPreferences("ownership-hook", 0).edit()
-                    .putLong("lastSeenMs", System.currentTimeMillis())
-                    .putInt("api", api)
-                    .putLong("versionCode", version)
-                    .apply();
+        if (!self && ("hookOnline".equals(method) || "hookAck".equals(method))) {
+            var edit = getContext().getSharedPreferences("ownership-hook", 0).edit()
+                    .putLong("lastSeenElapsedMs", android.os.SystemClock.elapsedRealtime());
+            if ("hookOnline".equals(method)) {
+                int api = extras == null ? 0 : extras.getInt("api", 0);
+                long version = extras == null ? 0 : extras.getLong("versionCode", 0);
+                edit.putInt("api", api).putLong("versionCode", version);
+            } else {
+                long generation = extras == null ? -1 : extras.getLong("generation", -1);
+                if (generation >= 0) edit.putLong("ackGeneration", generation);
+            }
+            edit.apply();
         }
         LocalPrefs state = LocalPrefs.open(getContext(), "ownership");
         Bundle result = new Bundle();
@@ -45,7 +49,8 @@ public final class OwnershipProvider extends ContentProvider {
         var hook = getContext().getSharedPreferences("ownership-hook", 0);
         result.putInt("hookApi", hook.getInt("api", 0));
         result.putLong("hookVersionCode", hook.getLong("versionCode", 0));
-        result.putLong("hookLastSeenMs", hook.getLong("lastSeenMs", 0));
+        result.putLong("hookLastSeenElapsedMs", hook.getLong("lastSeenElapsedMs", 0));
+        result.putLong("hookAckGeneration", hook.getLong("ackGeneration", -1));
         return result;
     }
 
