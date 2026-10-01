@@ -5,9 +5,6 @@ import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.util.Log;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 
 /** OHealth's listener API stays false on this ROM and then disable/enable-loops the service. */
 public final class OHealthNotificationAccessHook {
