@@ -82,6 +82,8 @@ public final class MiFitnessOwnershipHook {
 
         observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
             @Override public void onChange(boolean selfChange) {
+                // This also acts as a liveness handshake from the bridge UI.
+                signalOnline();
                 if (nativeOwnership()) releaseOfficialLinks();
             }
         };
