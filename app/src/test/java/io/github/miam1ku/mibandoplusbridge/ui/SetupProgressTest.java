@@ -7,11 +7,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class SetupProgressTest {
-    @Test public void missingRootIsFirstEvenWithBinding() {
+    @Test public void missingHookIsFirstEvenWithBinding() {
         SetupProgress progress = new SetupProgress(false, true, true, false, false, false);
-        assertEquals(SetupProgress.Step.ROOT, progress.current());
+        assertEquals(SetupProgress.Step.HOOK, progress.current());
         assertTrue(progress.showChecklist());
-        assertEquals("检查 Root", progress.primaryLabel());
+        assertEquals("检查 LSPosed", progress.primaryLabel());
     }
 
     @Test public void missingBindingIsImportEvenWhenUnregistered() {
