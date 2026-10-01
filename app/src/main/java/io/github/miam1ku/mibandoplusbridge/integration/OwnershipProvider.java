@@ -10,6 +10,7 @@ import android.os.Bundle;
 import android.os.Process;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
+import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 
 /**
  * Minimal ownership IPC used by the module injected into Mi Fitness.
@@ -35,7 +36,10 @@ public final class OwnershipProvider extends ContentProvider {
                 edit.putInt("api", api).putLong("versionCode", version);
             } else {
                 long generation = extras == null ? -1 : extras.getLong("generation", -1);
-                if (generation >= 0) edit.putLong("ackGeneration", generation);
+                if (generation >= 0) {
+                    edit.putLong("ackGeneration", generation);
+                    OwnershipController.noteHookAck(generation);
+                }
             }
             edit.apply();
         }
