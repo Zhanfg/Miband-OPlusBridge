@@ -324,8 +324,8 @@ public final class MainActivity extends AppCompatActivity {
         var prefs = getSharedPreferences("ownership-hook", MODE_PRIVATE);
         if (prefs.getInt("api", 0) < 102
                 || prefs.getLong("versionCode", 0) != BuildConfig.VERSION_CODE) return false;
-        long seen = prefs.getLong("lastSeenMs", 0);
-        long age = System.currentTimeMillis() - seen;
+        long seen = prefs.getLong("lastSeenElapsedMs", 0);
+        long age = android.os.SystemClock.elapsedRealtime() - seen;
         return seen > 0 && age >= 0 && age <= 5_000;
     }
 
