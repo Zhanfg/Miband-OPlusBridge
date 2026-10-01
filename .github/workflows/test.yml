@@ -49,7 +49,9 @@ jobs:
             echo "root-shell compatibility path reintroduced" >&2
             exit 1
           fi
-          if grep -R -n 'de\.robv\.android\.xposed' app/src/main/java 2>/dev/null; then
+          if grep -R -n -E '^[[:space:]]*import[[:space:]]+de\.robv\.android\.xposed' \
+              app/src/main/java 2>/dev/null \
+              || grep -n 'de\.robv\.android\.xposed:api' app/build.gradle; then
             echo "legacy Xposed runtime API reintroduced" >&2
             exit 1
           fi
