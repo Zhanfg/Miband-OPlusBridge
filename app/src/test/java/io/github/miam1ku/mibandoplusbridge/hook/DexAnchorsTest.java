@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.lang.reflect.Method;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.Test;
@@ -37,6 +38,36 @@ public final class DexAnchorsTest {
         } finally {
             Files.deleteIfExists(apk);
         }
+    }
+
+    static class Stable {
+        void refreshWearableDeviceList(java.util.List<?> a, java.util.List<?> b, String id) {}
+    }
+
+    static class Renamed {
+        void a(java.util.List<?> a, java.util.List<?> b, String id) {}
+    }
+
+    static class Ambiguous {
+        void a(String value) {}
+        void b(String value) {}
+    }
+
+    @Test public void stableNameWinsStructuralResolution() throws Exception {
+        Method method = DexAnchors.resolveMethod(Stable.class, "refreshWearableDeviceList", void.class,
+                java.util.List.class, java.util.List.class, String.class);
+        assertEquals("refreshWearableDeviceList", method.getName());
+    }
+
+    @Test public void uniqueSignatureSurvivesMethodRename() throws Exception {
+        Method method = DexAnchors.resolveMethod(Renamed.class, "refreshWearableDeviceList", void.class,
+                java.util.List.class, java.util.List.class, String.class);
+        assertEquals("a", method.getName());
+    }
+
+    @Test public void ambiguousSignatureFailsClosed() {
+        assertThrows(NoSuchMethodException.class,
+                () -> DexAnchors.resolveMethod(Ambiguous.class, "missing", void.class, String.class));
     }
 
     private static void put(ZipOutputStream zip, String name, byte[] bytes) throws IOException {
