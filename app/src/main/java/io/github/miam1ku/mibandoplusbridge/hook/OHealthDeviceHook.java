@@ -131,18 +131,29 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_DEVICE_CONNECT_HOOK_UNAVAILABLE "
                     + moved.getClass().getSimpleName());
         }
-        XposedHelpers.findAndHookMethod(
-                "com.heytap.health.devicemanagerimpl.host.HDM2Connect", loader, "retryConnect", String.class,
-                new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam param) {
-                        Object mac = XposedHelpers.getObjectField(param.thisObject, "mCurrActiveMac");
-                        Bundle shown = snapshot;
-                        if (shown != null && io.github.miam1ku.mibandoplusbridge.data.MacIds.same(
-                                shown.getString("mac", ""), String.valueOf(mac))) {
-                            param.setResult(null);
-                        }
+        try {
+            Class<?> connect = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.devicemanagerimpl.host.HDM2Connect",
+                    "com.heytap.health.devicemanagerimpl.", null,
+                    new String[]{"retryConnect"}, new String[]{"mCurrActiveMac"});
+            XposedBridge.hookMethod(HookResolver.resolveMethod(connect,
+                    "retryConnect", null, String.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    Object mac = XposedHelpers.getObjectField(param.thisObject, "mCurrActiveMac");
+                    Bundle shown = snapshot;
+                    if (shown != null && io.github.miam1ku.mibandoplusbridge.data.MacIds.same(
+                            shown.getString("mac", ""), String.valueOf(mac))) {
+                        param.setResult(null);
                     }
-                });
+                }
+            });
+            if (!"com.heytap.health.devicemanagerimpl.host.HDM2Connect".equals(connect.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_RETRY_CONNECT_ADAPTED " + connect.getName());
+            }
+        } catch (Throwable moved) {
+            Log.i("OplusBandBridge", "OHEALTH_RETRY_CONNECT_UNAVAILABLE "
+                    + moved.getClass().getSimpleName());
+        }
         try {
             XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "resetCurrSelectMac", null), new XC_MethodHook() {
@@ -586,7 +597,13 @@ public final class OHealthDeviceHook {
                     });
         } catch (Throwable ignored) { }
         try {
-            Class<?> hey = XposedHelpers.findClass("com.heytap.health.devicemanager.client.DMHeytap", loader);
+            Class<?> hey = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.devicemanager.client.DMHeytap",
+                    "com.heytap.health.devicemanager.", null,
+                    new String[0], new String[]{"managerApi", "businessApi"});
+            if (!"com.heytap.health.devicemanager.client.DMHeytap".equals(hey.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_DM_ADAPTED " + hey.getName());
+            }
             java.lang.reflect.Field api = hey.getField("managerApi");
             XC_MethodHook byMac = new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
@@ -651,37 +668,44 @@ public final class OHealthDeviceHook {
                     + failure.getClass().getSimpleName());
         }
         try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.deviceability.NotificationBaseAbilityTool", loader,
-                    "buildByMac", String.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            Object info = bandDevice(loader, param.args.length == 0 ? null : param.args[0]);
-                            if (info == null) return;
-                            try {
-                                param.setResult(XposedHelpers.newInstance(XposedHelpers.findClass(
-                                        "com.heytap.health.deviceability.NotificationBaseAbilityDevice",
-                                        loader), info));
-                            } catch (Throwable failure) {
-                                Log.i("OplusBandBridge", "OHEALTH_NOTIFY_ABILITY_UNAVAILABLE "
-                                        + failure.getClass().getSimpleName());
-                            }
-                        }
-                    });
+            Class<?> abilityDevice = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.deviceability.NotificationBaseAbilityDevice",
+                    "com.heytap.health.deviceability.", null,
+                    new String[]{"isSupportFluid"}, new String[0]);
+            Class<?> abilityTool = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.deviceability.NotificationBaseAbilityTool",
+                    "com.heytap.health.deviceability.", null,
+                    new String[]{"buildByMac"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(abilityTool,
+                    "buildByMac", null, String.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    Object info = bandDevice(loader, param.args.length == 0 ? null : param.args[0]);
+                    if (info == null) return;
+                    try {
+                        param.setResult(XposedHelpers.newInstance(abilityDevice, info));
+                    } catch (Throwable failure) {
+                        Log.i("OplusBandBridge", "OHEALTH_NOTIFY_ABILITY_UNAVAILABLE "
+                                + failure.getClass().getSimpleName());
+                    }
+                }
+            });
+            XposedBridge.hookMethod(HookResolver.resolveMethod(abilityDevice,
+                    "isSupportFluid", boolean.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        if (isBand(param.thisObject)) param.setResult(false);
+                    } catch (Throwable ignored) { }
+                }
+            });
+            if (!"com.heytap.health.deviceability.NotificationBaseAbilityTool".equals(abilityTool.getName())
+                    || !"com.heytap.health.deviceability.NotificationBaseAbilityDevice".equals(abilityDevice.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_NOTIFY_ABILITY_ADAPTED tool="
+                        + abilityTool.getName() + " device=" + abilityDevice.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFY_ABILITY_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
         }
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.deviceability.NotificationBaseAbilityDevice", loader,
-                    "isSupportFluid", new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (isBand(param.thisObject)) param.setResult(false);
-                            } catch (Throwable ignored) { }
-                        }
-                    });
-        } catch (Throwable ignored) { }
         XC_MethodHook bandFalse = new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam param) {
                 try {
@@ -689,17 +713,26 @@ public final class OHealthDeviceHook {
                 } catch (Throwable ignored) { }
             }
         };
-        for (String method : new String[]{"isSecondaryDevice", "isFamilyDevice"}) {
-            try {
-                XposedHelpers.findAndHookMethod(
-                        "com.heytap.health.devicemanager.deviceability.DeviceInfo", loader,
-                        method, bandFalse);
-            } catch (Throwable ignored) { }
-        }
         try {
-            Class<?> fragment = XposedHelpers.findClass(
-                    "com.heytap.health.watch.notification.impl.ui.NotificationSyncFragment", loader);
-            XposedBridge.hookAllMethods(fragment, "showScreen", new XC_MethodHook() {
+            Class<?> abilityInfo = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.devicemanager.deviceability.DeviceInfo",
+                    "com.heytap.health.devicemanager.", null,
+                    new String[]{"isSecondaryDevice", "isFamilyDevice"}, new String[0]);
+            for (String method : new String[]{"isSecondaryDevice", "isFamilyDevice"}) {
+                XposedBridge.hookMethod(HookResolver.resolveMethod(
+                        abilityInfo, method, boolean.class), bandFalse);
+            }
+            if (!"com.heytap.health.devicemanager.deviceability.DeviceInfo".equals(abilityInfo.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_DEVICE_ABILITY_ADAPTED " + abilityInfo.getName());
+            }
+        } catch (Throwable ignored) { }
+        try {
+            Class<?> fragment = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.watch.notification.impl.ui.NotificationSyncFragment",
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"showScreen", "getVm"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(fragment,
+                    "showScreen", null), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     try {
                         Object vm = XposedHelpers.callMethod(param.thisObject, "getVm");
