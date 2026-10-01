@@ -38,6 +38,7 @@ import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CompanionPresence;
 import io.github.miam1ku.mibandoplusbridge.notify.SleepMusic;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand;
 import io.github.miam1ku.mibandoplusbridge.protocol.SppDiagnosticClient;
@@ -69,6 +70,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView metricsLine;
     private TextView healthLine;
     private TextView permissionStatus;
+    private TextView companionStatus;
     private TextView checklistRoot;
     private TextView checklistImport;
     private TextView checklistProfile;
@@ -136,7 +138,9 @@ public final class MainActivity extends AppCompatActivity {
                 io.github.miam1ku.mibandoplusbridge.integration.BandDetailsActivity.class)));
         screen.navRow(shortcuts, "协议测试", () -> startActivity(new Intent(this, LabActivity.class)));
         screen.navRow(shortcuts, "天气同步", () -> startActivity(new Intent(this, WeatherActivity.class)));
+        screen.navRow(shortcuts, "系统低功耗保活", this::configureCompanionKeepAlive);
         screen.navRow(shortcuts, "发送调试日志到 QQ", this::shareDebugLog);
+        companionStatus = screen.caption(shortcuts, "系统保活：正在读取…");
         screen.caption(shortcuts, "控制中心编辑里添加「手环」。下拉或点一下会拉起连接，不会断开。");
         screen.setLastChildMargin(shortcuts, 0);
         LinearLayout sleepCard = screen.card();
@@ -266,6 +270,7 @@ public final class MainActivity extends AppCompatActivity {
         refreshOwnership();
         refreshDevice();
         refreshBonded();
+        refreshCompanionStatus();
         if (hostSupported) refresh();
         else worker.execute(() -> {
             boolean supported = HostIdentity.installed(this, HostIdentity.MI_PACKAGE);
@@ -355,6 +360,7 @@ public final class MainActivity extends AppCompatActivity {
                     repository.disconnected();
                 }
                 if (registered && ready && hasBluetoothPermission()) {
+                    CompanionPresence.ensureObserving(this);
                     BandLiveService.start(this);
                 }
                 message = !registered
@@ -409,6 +415,7 @@ public final class MainActivity extends AppCompatActivity {
                     if (!repository.isRegistered() || !owner.nativeReady()) {
                         throw new IllegalStateException("NATIVE_OWNERSHIP_REQUIRED");
                     }
+                    CompanionPresence.ensureObserving(this);
                     BandLiveService.start(this);
                     BandLiveService.requestSync(this);
                     message = "设备已登记，正在连接。";
@@ -418,6 +425,7 @@ public final class MainActivity extends AppCompatActivity {
                         removalSaved = true;
                         main.post(this::refreshDevice);
                     }
+                    CompanionPresence.stopObserving(this);
                     BandLiveService.stop(this);
                     if (!SppDiagnosticClient.stopAllAndWait()) {
                         throw new OwnershipController.Failure("DIAGNOSTIC_SOCKET_STILL_ACTIVE");
@@ -478,6 +486,65 @@ public final class MainActivity extends AppCompatActivity {
                 .setNegativeButton("取消", null)
                 .setPositiveButton(change == Change.ADD ? "添加并接管" : "连接", (dialog, which) -> changeOwnership(change))
                 .show();
+    }
+
+    private void configureCompanionKeepAlive() {
+        if (!isUnlocked()) {
+            ownershipStatus.setText("请先解锁手机，再配置系统保活。");
+            return;
+        }
+        if (CompanionPresence.associationId(this) >= 0) {
+            boolean observing = CompanionPresence.ensureObserving(this);
+            ownershipStatus.setText(observing
+                    ? "系统配套设备保活已启用。手环出现或蓝牙连接时由系统唤醒桥接。"
+                    : "系统关联存在，但 presence observer 未能启用。");
+            refreshCompanionStatus();
+            return;
+        }
+        CompanionPresence.requestAssociation(this, new CompanionPresence.Listener() {
+            @Override public void onPending() {
+                if (!isDestroyed()) ownershipStatus.setText("请在系统窗口确认这只手环的配套设备关联。");
+            }
+
+            @Override public void onAssociated() {
+                if (isDestroyed()) return;
+                CompanionPresence.ensureObserving(MainActivity.this);
+                ownershipStatus.setText("系统配套设备关联完成。已启用低功耗保活。");
+                refreshCompanionStatus();
+            }
+
+            @Override public void onFailure(String reason) {
+                if (isDestroyed()) return;
+                ownershipStatus.setText("系统低功耗保活未启用：" + reason);
+                refreshCompanionStatus();
+            }
+        });
+    }
+
+    private void refreshCompanionStatus() {
+        if (companionStatus == null) return;
+        if (!CompanionPresence.supported(this)) {
+            companionStatus.setText("系统保活：此系统不支持 Companion Device");
+            return;
+        }
+        int association = CompanionPresence.associationId(this);
+        if (association < 0) {
+            companionStatus.setText("系统保活：未关联（可选，一次确认后由系统按手环在场状态唤醒）");
+            return;
+        }
+        boolean observing = new OwnershipController(this).nativeReady()
+                && CompanionPresence.ensureObserving(this);
+        companionStatus.setText(observing
+                ? "系统保活：已关联 · presence observer 已启用"
+                : "系统保活：已关联 · 等待桥接接管后启用");
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != CompanionPresence.ASSOCIATION_REQUEST) return;
+        main.postDelayed(() -> {
+            if (!isDestroyed()) refreshCompanionStatus();
+        }, 250);
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
