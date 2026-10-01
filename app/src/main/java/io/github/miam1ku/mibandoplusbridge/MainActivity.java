@@ -344,6 +344,7 @@ public final class MainActivity extends AppCompatActivity {
             refreshLspVerification();
             if (lspHookLiveNow()) {
                 checkingLsp = false;
+                updateControls();
                 ownershipStatus.setText("LSPosed API 102 Hook 已实时确认。");
                 return;
             }
