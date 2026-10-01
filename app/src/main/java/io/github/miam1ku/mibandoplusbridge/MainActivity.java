@@ -71,13 +71,12 @@ public final class MainActivity extends AppCompatActivity {
     private TextView healthLine;
     private TextView permissionStatus;
     private TextView companionStatus;
-    private TextView checklistRoot;
+    private TextView checklistLsp;
     private TextView checklistImport;
     private TextView checklistProfile;
     private TextView checklistAdd;
     private TextView primaryHint;
     private Button homePrimary;
-    private Button openKsu;
     private Button remove;
     private Button restore;
     private Button advancedRestore;
@@ -85,10 +84,10 @@ public final class MainActivity extends AppCompatActivity {
     private boolean versionPromptShown;
     private boolean launchHostAfterOpen;
     private boolean profileAfterRestore;
-    private boolean rootGranted;
-    private boolean probingRoot;
+    private boolean lspVerified;
+    private boolean checkingLsp;
     private Change pendingPermission;
-    private static final String SETUP_PREREQ = "开始前：系统蓝牙配对；LSPosed 启用本模块并勾选小米运动健康、OHealth、我的设备后强停一次；在 KernelSU 中允许本应用。";
+    private static final String SETUP_PREREQ = "开始前：系统蓝牙配对；LSPosed API 102 启用本模块，并勾选小米运动健康、OHealth、我的设备和系统时钟。";
     private enum Change { ADD, RECONNECT, REMOVE, RESTORE }
     private final ContentObserver deviceObserver = new ContentObserver(main) {
         @Override public void onChange(boolean selfChange) { refreshDevice(); }
@@ -115,15 +114,14 @@ public final class MainActivity extends AppCompatActivity {
         screen.setLastChildMargin(statusCard, 0);
         setupCard = screen.card();
         screen.overline(setupCard, "首次设置");
-        checklistRoot = screen.caption(setupCard, "");
+        checklistLsp = screen.caption(setupCard, "");
         checklistImport = screen.caption(setupCard, "");
         checklistProfile = screen.caption(setupCard, "");
         checklistAdd = screen.caption(setupCard, "");
         primaryHint = screen.caption(setupCard, "");
         screen.caption(setupCard, SETUP_PREREQ);
         screen.setLastChildMargin(setupCard, 0);
-        homePrimary = screen.filled("检查 Root", this::runHomePrimary);
-        openKsu = screen.outlined("打开 KernelSU", this::openKernelSu);
+        homePrimary = screen.filled("验证 LSPosed", this::runHomePrimary);
         remove = screen.outlined("从健康移除", () -> new MaterialAlertDialogBuilder(this)
                 .setTitle("从健康移除手环？")
                 .setMessage("将停止桥接连接并恢复小米运动健康。已保存的健康历史和加密绑定信息会保留；以后可重新添加同一只手环。")
@@ -229,7 +227,7 @@ public final class MainActivity extends AppCompatActivity {
         getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, deviceObserver);
         getContentResolver().registerContentObserver(HealthQueueProvider.URI, false, deviceObserver);
         refreshDevice();
-        requestRoot();
+        refreshLspVerification();
     }
 
     private void shareDebugLog() {
@@ -262,8 +260,8 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         promptHostVersions();
-        if (!rootGranted) requestRoot();
-        else continueInit();
+        refreshLspVerification();
+        continueInit();
     }
 
     private void continueInit() {
@@ -277,7 +275,7 @@ public final class MainActivity extends AppCompatActivity {
             main.post(() -> {
                 if (isDestroyed()) return;
                 hostSupported = supported;
-                open.setEnabled(supported && rootGranted);
+                open.setEnabled(supported && lspVerified);
                 if (supported) refresh();
                 else status.setText("已安装的小米运动健康版本不受支持。导入已禁用。");
             });
@@ -313,37 +311,40 @@ public final class MainActivity extends AppCompatActivity {
     }
 
 
-    private void requestRoot() {
-        if (worker.isShutdown() || probingRoot || changingOwnership) return;
-        probingRoot = true;
-        ownershipStatus.setText("正在检查 KernelSU 授权…");
-        worker.execute(() -> {
-            boolean granted = new OwnershipController(this).probeRoot();
-            main.post(() -> {
-                if (isDestroyed()) return;
-                probingRoot = false;
-                rootGranted = granted;
-                ownershipStatus.setText(granted
-                        ? "KernelSU 已授权。"
-                        : "未获得 root。打开 KernelSU，为本应用打开超级用户权限，返回后点「检查 Root」。");
-                updateControls();
-                refreshDevice();
-                if (granted) continueInit();
-            });
-        });
+    private void refreshLspVerification() {
+        var prefs = getSharedPreferences("ownership-hook", MODE_PRIVATE);
+        lspVerified = prefs.getInt("api", 0) >= 102
+                && prefs.getLong("versionCode", 0) == BuildConfig.VERSION_CODE;
+        updateControls();
     }
 
-    private void openKernelSu() {
-        Intent launch = getPackageManager().getLaunchIntentForPackage("me.weishu.kernelsu");
-        if (launch == null) {
-            ownershipStatus.setText("未找到 KernelSU。请安装管理器后为本应用打开超级用户权限。");
+    private void verifyLsp() {
+        if (checkingLsp || changingOwnership) return;
+        checkingLsp = true;
+        refreshLspVerification();
+        if (lspVerified) {
+            checkingLsp = false;
+            ownershipStatus.setText("LSPosed API 102 注入已验证。");
             return;
         }
+        Intent launch = getPackageManager().getLaunchIntentForPackage(HostIdentity.MI_PACKAGE);
+        if (launch == null) {
+            checkingLsp = false;
+            ownershipStatus.setText("未找到小米运动健康，无法验证 LSPosed 注入。");
+            return;
+        }
+        ownershipStatus.setText("正在验证 LSPosed：请让小米运动健康启动一次，然后返回这里。");
         startActivity(launch);
+        main.postDelayed(() -> {
+            if (isDestroyed()) return;
+            checkingLsp = false;
+            refreshLspVerification();
+            if (lspVerified) ownershipStatus.setText("LSPosed API 102 注入已验证。");
+        }, 1200);
     }
 
     private void refreshOwnership() {
-        if (worker.isShutdown() || changingOwnership || !rootGranted) return;
+        if (worker.isShutdown() || changingOwnership) return;
         worker.execute(() -> {
             if (!isUnlocked()) return;
             OwnershipController owner = new OwnershipController(this);
@@ -359,14 +360,15 @@ public final class MainActivity extends AppCompatActivity {
                     }
                     repository.disconnected();
                 }
-                if (registered && ready && hasBluetoothPermission()) {
+                if (registered && ready && lspVerified && hasBluetoothPermission()) {
                     CompanionPresence.ensureObserving(this);
                     BandLiveService.start(this);
                 }
                 message = !registered
                         ? (needsOfficialRestore() ? "尚未登记，官方应用仍处于暂停状态。可添加设备或恢复官方管理。" : "尚未添加设备。")
                         : "NATIVE".equals(owner.mode())
-                                ? "已由桥接管理。连接状态以设备实际响应为准。"
+                                ? (lspVerified ? "已由桥接管理。连接状态以设备实际响应为准。"
+                                        : "已登记为桥接管理，但 LSPosed 102 尚未验证；暂不启动蓝牙会话。")
                                 : "当前由小米运动健康管理。可点击连接重新接管。";
             } catch (Exception failure) {
                 message = repository.isRegistered()
@@ -384,8 +386,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void changeOwnership(Change change) {
         if (worker.isShutdown() || changingOwnership) return;
-        if (!rootGranted) {
-            requestRoot();
+        if (!lspVerified) {
+            verifyLsp();
             return;
         }
         if (!isUnlocked()) {
@@ -404,7 +406,6 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 if (change == Change.ADD || change == Change.RECONNECT) {
                     if (!isUnlocked()) throw new IllegalStateException("USER_LOCKED");
-                    if (!owner.probeRoot()) throw new OwnershipController.Failure("ROOT_REQUIRED");
                     if (!hasBluetoothPermission()) throw new IllegalStateException("NEARBY_PERMISSION_REQUIRED");
                     if (change == Change.ADD) {
                         repository.registerDevice();
@@ -465,8 +466,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void requestNative(Change change) {
         if (changingOwnership) return;
-        if (!rootGranted) {
-            requestRoot();
+        if (!lspVerified) {
+            verifyLsp();
             return;
         }
         if (!isUnlocked()) {
@@ -481,8 +482,8 @@ public final class MainActivity extends AppCompatActivity {
         new MaterialAlertDialogBuilder(this)
                 .setTitle(change == Change.ADD ? "添加到健康并接管？" : "连接这只手环？")
                 .setMessage(change == Change.ADD
-                        ? "将暂停小米运动健康，由本应用接管手环。请先导入绑定，结束表盘、OTA 和 NFC，并完成 KernelSU 授权。绑定和健康历史会保留。"
-                        : "请先结束小米运动健康的表盘、OTA 和 NFC。接管需要 KernelSU 授权。绑定和健康历史会保留。")
+                        ? "将通过 LSPosed 让小米运动健康释放这只手环的蓝牙连接，再由本应用接管。请先结束表盘、OTA 和 NFC。绑定和健康历史会保留。"
+                        : "请先结束小米运动健康的表盘、OTA 和 NFC。LSPosed 只阻止这只手环的官方连接，不会禁用小米运动健康。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton(change == Change.ADD ? "添加并接管" : "连接", (dialog, which) -> changeOwnership(change))
                 .show();
@@ -592,7 +593,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private boolean needsOfficialRestore() {
         var ownership = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(this, "ownership");
-        return ownership.getBoolean("ownsDisable", false) || ownership.getBoolean("transitionPending", false);
+        return "NATIVE".equals(ownership.getString("mode", "OFFICIAL"))
+                || ownership.getBoolean("transitionPending", false);
     }
 
     private void updateControls() {
@@ -604,18 +606,14 @@ public final class MainActivity extends AppCompatActivity {
         }
         if (homePrimary != null) {
             homePrimary.setText(progress.primaryLabel());
-            homePrimary.setEnabled(!changingOwnership && !probingRoot);
+            homePrimary.setEnabled(!changingOwnership && !checkingLsp);
         }
-        if (openKsu != null) {
-            openKsu.setVisibility(rootGranted ? View.GONE : View.VISIBLE);
-            openKsu.setEnabled(!probingRoot);
-        }
-        remove.setVisibility(registered && rootGranted ? View.VISIBLE : View.GONE);
+        remove.setVisibility(registered ? View.VISIBLE : View.GONE);
         remove.setEnabled(!changingOwnership);
-        restore.setVisibility(rootGranted && needsOfficialRestore() ? View.VISIBLE : View.GONE);
-        restore.setText(registered ? "恢复小米运动健康" : "重试恢复小米运动健康");
+        restore.setVisibility(needsOfficialRestore() ? View.VISIBLE : View.GONE);
+        restore.setText("恢复小米运动健康连接");
         restore.setEnabled(!changingOwnership);
-        advancedRestore.setEnabled(!changingOwnership && rootGranted);
+        advancedRestore.setEnabled(!changingOwnership);
     }
 
     private SetupProgress readProgress() {
@@ -637,10 +635,10 @@ public final class MainActivity extends AppCompatActivity {
         try {
             accountConfirmed = new HealthRecordStore(this).confirmedAccountHash() != null;
         } catch (Exception ignored) { }
-        return new SetupProgress(rootGranted, hasBinding, hasProfile, registered, nativeOwned, accountConfirmed);
+        return new SetupProgress(lspVerified, hasBinding, hasProfile, registered, nativeOwned, accountConfirmed);
     }
     private void bindChecklist(SetupProgress progress) {
-        bindChecklistRow(checklistRoot, progress, SetupProgress.Step.ROOT, "KernelSU 授权");
+        bindChecklistRow(checklistLsp, progress, SetupProgress.Step.LSP, "LSPosed 102 注入");
         bindChecklistRow(checklistImport, progress, SetupProgress.Step.IMPORT, "导入绑定");
         bindChecklistRow(checklistProfile, progress, SetupProgress.Step.PROFILE, "采集连接参数");
         bindChecklistRow(checklistAdd, progress, SetupProgress.Step.ADD, "添加到健康");
@@ -668,9 +666,9 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void runHomePrimary() {
-        if (changingOwnership || probingRoot) return;
+        if (changingOwnership || checkingLsp) return;
         switch (readProgress().current()) {
-            case ROOT -> requestRoot();
+            case LSP -> verifyLsp();
             case IMPORT -> startBindingImport();
             case PROFILE -> startProfileCapture();
             case ADD -> requestNative(Change.ADD);
@@ -801,7 +799,7 @@ public final class MainActivity extends AppCompatActivity {
             case "PROTOCOL_VERSION_UNSUPPORTED", "SESSION_CONFIGURATION_UNSUPPORTED" -> "官方连接不是可接管的 SPP 会话。蓝牙或 GATT-only 设备无法添加。";
             case "DEVICE_IDENTITY_CHANGED" -> "导入设备与已保存的设备身份不一致，不能替换。请重新导入原手环。";
             case "BAND_STATE_STORAGE_FAILED", "OWNERSHIP_STORAGE_FAILED" -> "设备状态未能保存，请检查可用存储空间后重试。";
-            case "ROOT_REQUIRED", "ROOT_ACTION_FAILED", "ROOT_ACTION_TIMEOUT" -> "请确认已授予桥接应用 KernelSU root 权限后重试。";
+            case "LSP_REQUIRED" -> "请先在 LSPosed 中启用本模块并验证 API 102 注入。";
             case "HOST_VERSION_UNSUPPORTED" -> "小米运动健康版本不受支持，请更换受支持的版本后重试。";
             case "NEARBY_PERMISSION_REQUIRED" -> "请授予附近设备权限后重试。";
             case "DEVICE_NOT_REGISTERED" -> "请先添加设备。";
@@ -921,10 +919,10 @@ public final class MainActivity extends AppCompatActivity {
     private void showSetupGuide() {
         new MaterialAlertDialogBuilder(this)
                 .setTitle("使用说明")
-                .setMessage("1. 打开 KernelSU，为本应用打开超级用户权限，返回后点「检查 Root」。\n"
+                .setMessage("1. 在 LSPosed 中启用本模块并勾选要求的作用域，打开一次小米运动健康完成 API 102 注入验证。\n"
                         + "2. 导入绑定：选择已配对手环，打开小米运动健康点开该设备。连接参数会同时记录。\n"
                         + "3. 若提示连接参数丢失：点「采集连接参数」，在小米运动健康里再连一次手环。\n"
-                        + "4. 添加到健康：暂停小米运动健康并由本应用接管。\n"
+                        + "4. 添加到健康：LSPosed 只让出这只手环的蓝牙连接，由本应用接管，不需要 Root。\n"
                         + "控制中心编辑里添加「手环」。下拉或点一下会拉起连接，不会断开。\n\n"
                         + SETUP_PREREQ)
                 .setPositiveButton("关闭", null)
@@ -933,8 +931,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void startBindingImport() {
         if (changingOwnership) return;
-        if (!rootGranted) {
-            requestRoot();
+        if (!lspVerified) {
+            verifyLsp();
             return;
         }
         if (!isUnlocked()) {
@@ -1045,8 +1043,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void startProfileCapture() {
         if (changingOwnership) return;
-        if (!rootGranted) {
-            requestRoot();
+        if (!lspVerified) {
+            verifyLsp();
             return;
         }
         if (!isUnlocked()) {
