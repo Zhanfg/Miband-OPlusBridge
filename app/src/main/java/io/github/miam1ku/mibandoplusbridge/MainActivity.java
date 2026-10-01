@@ -824,15 +824,15 @@ public final class MainActivity extends AppCompatActivity {
             case "OBSERVED_PROFILE_REQUIRED" -> "连接参数丢失。请点「采集连接参数」，在小米运动健康中重连一次手环。";
             case "FIRMWARE_OR_MODEL_UNSUPPORTED" -> "手环未返回可用的型号或固件。";
             case "OOB_BRANCH_UNSUPPORTED" -> "这只设备使用了不受支持的配对认证。";
-            case "PROTOCOL_VERSION_UNSUPPORTED", "SESSION_CONFIGURATION_UNSUPPORTED" -> "官方连接不是可接管的 SPP 会话。蓝牙或 GATT-only 设备无法添加。";
+            case "PROTOCOL_VERSION_UNSUPPORTED", "SESSION_CONFIGURATION_UNSUPPORTED" -> "当前实机连接 profile 暂不支持接管，请重新采集连接参数。";
             case "DEVICE_IDENTITY_CHANGED" -> "导入设备与已保存的设备身份不一致，不能替换。请重新导入原手环。";
             case "BAND_STATE_STORAGE_FAILED", "OWNERSHIP_STORAGE_FAILED" -> "设备状态未能保存，请检查可用存储空间后重试。";
             case "LSP_REQUIRED" -> "请先在 LSPosed 中启用本模块并验证 API 102 注入。";
+            case "LSP_OWNERSHIP_ACK_TIMEOUT" -> "小米运动健康中的 LSPosed Hook 没有确认本次接管，已自动回滚到官方管理。";
             case "HOST_VERSION_UNSUPPORTED" -> "小米运动健康版本不受支持，请更换受支持的版本后重试。";
             case "NEARBY_PERMISSION_REQUIRED" -> "请授予附近设备权限后重试。";
             case "DEVICE_NOT_REGISTERED" -> "请先添加设备。";
             case "DIAGNOSTIC_SOCKET_STILL_ACTIVE" -> "连接尚未完全停止，请稍后重试恢复官方管理。";
-            case "OWNERSHIP_RECOVERY_REQUIRED", "OFFICIAL_ALREADY_DISABLED" -> "请先恢复官方管理并确认官方应用已启用，再重试接管。";
             default -> "操作未完成，请重试；必要时先恢复官方管理。";
         };
     }
