@@ -12,9 +12,6 @@ import android.service.notification.StatusBarNotification;
 import android.util.Log;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Modifier;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
 import java.util.ArrayList;
@@ -144,9 +141,9 @@ public final class OHealthDeviceHook {
         String mac = band.getString("mac", "");
         try {
             if (io.github.miam1ku.mibandoplusbridge.data.MacIds.same(mac, String.valueOf(
-                    de.robv.android.xposed.XposedHelpers.callMethod(manager, "getThirdpartySelectMac")))) return true;
+                    XposedHelpers.callMethod(manager, "getThirdpartySelectMac")))) return true;
             return allRole != null && io.github.miam1ku.mibandoplusbridge.data.MacIds.same(mac, String.valueOf(
-                    de.robv.android.xposed.XposedHelpers.callMethod(manager, "getCurrActiveMacByRole", allRole)));
+                    XposedHelpers.callMethod(manager, "getCurrActiveMacByRole", allRole)));
         } catch (Throwable unavailable) { return false; }
     }
 
@@ -1207,7 +1204,7 @@ public final class OHealthDeviceHook {
 
     private static android.service.notification.StatusBarNotification clockNotification(Object bean) {
         try {
-            Object origin = de.robv.android.xposed.XposedHelpers.callMethod(bean, "getOrigin");
+            Object origin = XposedHelpers.callMethod(bean, "getOrigin");
             if (origin instanceof android.service.notification.StatusBarNotification posted) return posted;
         } catch (Throwable ignored) { }
         return null;
@@ -1215,7 +1212,7 @@ public final class OHealthDeviceHook {
 
     private static String clockShape(Object bean) {
         try {
-            Object origin = de.robv.android.xposed.XposedHelpers.callMethod(bean, "getOrigin");
+            Object origin = XposedHelpers.callMethod(bean, "getOrigin");
             if (!(origin instanceof android.service.notification.StatusBarNotification posted)) return "origin=absent";
             android.app.Notification notification = posted.getNotification();
             String channel = notification == null || notification.getChannelId() == null ? "" : notification.getChannelId();
