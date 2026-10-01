@@ -29,6 +29,14 @@ public final class BandStateRepository {
             return isUnlocked() && state().getBoolean("registered", false);
         }
     }
+    public String registeredDeviceId() {
+        synchronized (STATE_LOCK) {
+            if (!isUnlocked()) return "";
+            LocalPrefs prefs = state();
+            return prefs.getBoolean("registered", false) ? prefs.getString("deviceId", "") : "";
+        }
+    }
+
 
     public void registerDevice() throws Exception {
         synchronized (STATE_LOCK) {
