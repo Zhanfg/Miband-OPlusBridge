@@ -47,7 +47,7 @@ public final class OHealthNotificationAccessHook {
             for (Class<?>[] signature : new Class<?>[][] {
                     {Context.class}, new Class<?>[0]}) {
                 try {
-                    anchored = DexAnchors.resolveAnchoredMethod(hostContext, loader,
+                    anchored = HookResolver.resolveAnchoredMethod(hostContext, loader,
                             "com.heytap.health.watch.notification.__MovedNotificationListenerUtil",
                             "isNotificationListenerEnabled",
                             java.util.List.of("enabled_notification_listeners"),
