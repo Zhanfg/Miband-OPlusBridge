@@ -177,6 +177,18 @@ public final class OHealthDeviceHook {
         installDevicePages(loader, wearableEventType);
         installNativePanel(loader);
         observeSnapshots(loader);
+        signalProjectionOnline("device-controller:" + controllerClass.getName());
+    }
+
+    private static void signalProjectionOnline(String stage) {
+        Context current = hostContext;
+        if (current == null) return;
+        try {
+            Bundle extras = new Bundle();
+            extras.putString("stage", stage);
+            current.getContentResolver().call(DeviceCardProvider.URI,
+                    "projectionOnline", null, extras);
+        } catch (RuntimeException ignored) { }
     }
 
     /** UI hooks only read this immutable, process-local IPC snapshot. */
