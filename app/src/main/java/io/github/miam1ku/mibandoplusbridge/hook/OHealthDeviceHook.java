@@ -592,28 +592,28 @@ public final class OHealthDeviceHook {
                     + failure.getClass().getSimpleName());
         }
         try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.devicemanager.devicetype.DeviceTypeUtil", loader,
-                    "getBoundDeviceByMac", String.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            Object info = bandDevice(loader, param.args.length == 0 ? null : param.args[0]);
-                            if (info != null) param.setResult(info);
-                        }
-                    });
+            Class<?> deviceTypeUtil = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.devicemanager.devicetype.DeviceTypeUtil",
+                    "com.heytap.health.devicemanager.", null,
+                    new String[]{"getBoundDeviceByMac", "getBoundDeviceInfoByMac"}, new String[0]);
+            XC_MethodHook boundDevice = new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    Object info = bandDevice(loader, param.args.length == 0 ? null : param.args[0]);
+                    if (info != null) param.setResult(info);
+                }
+            };
+            XposedBridge.hookMethod(HookResolver.resolveMethod(deviceTypeUtil,
+                    "getBoundDeviceByMac", null, String.class), boundDevice);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(deviceTypeUtil,
+                    "getBoundDeviceInfoByMac", null, String.class), boundDevice);
+            if (!"com.heytap.health.devicemanager.devicetype.DeviceTypeUtil".equals(deviceTypeUtil.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_DEVICE_TYPE_UTIL_ADAPTED "
+                        + deviceTypeUtil.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFY_DEVICE_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
         }
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.devicemanager.devicetype.DeviceTypeUtil", loader,
-                    "getBoundDeviceInfoByMac", String.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            Object info = bandDevice(loader, param.args.length == 0 ? null : param.args[0]);
-                            if (info != null) param.setResult(info);
-                        }
-                    });
-        } catch (Throwable ignored) { }
         try {
             Class<?> hey = HookResolver.resolveClassByMembers(hostContext, loader,
                     "com.heytap.health.devicemanager.client.DMHeytap",
