@@ -51,8 +51,12 @@ public final class OHealthDeviceHook {
         if (hostContext == null) hostContext = context;
         if (!HOST.equals(context.getPackageName())) return;
         main = new Handler(Looper.getMainLooper());
-        Class<?> controllerClass = HookResolver.resolveClass(hostContext, loader, CONTROLLER,
-                "com.heytap.health.device.tab.", List.class, List.class, String.class);
+        Class<?> infoClass = XposedHelpers.findClass(INFO, loader);
+        Class<?> controllerClass = HookResolver.resolveClassBySignatures(hostContext, loader, CONTROLLER,
+                "com.heytap.health.device.tab.",
+                new Class<?>[] {List.class, List.class, String.class},
+                new Class<?>[] {infoClass},
+                new Class<?>[] {infoClass, String.class});
         Method refreshWearable = HookResolver.resolveMethod(controllerClass,
                 "refreshWearableDeviceList", null, List.class, List.class, String.class);
         if (!CONTROLLER.equals(controllerClass.getName())
@@ -103,7 +107,6 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_DEVICE_REFRESH_VIEW_UNAVAILABLE "
                     + moved.getClass().getSimpleName());
         }
-        Class<?> infoClass = XposedHelpers.findClass(INFO, loader);
         try {
             XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "checkDeviceIsDisable", boolean.class, infoClass), new XC_MethodHook() {
