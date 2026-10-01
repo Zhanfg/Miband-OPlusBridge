@@ -251,13 +251,16 @@ public final class HealthQueueProvider extends ContentProvider {
         int[] values = extras.getIntArray("values");
         int[] distances = extras.getIntArray("distances");
         int[] calories = extras.getIntArray("calories");
+        int[] stages = extras.getIntArray("stages");
+        boolean[] completes = extras.getBooleanArray("completes");
         String[] timezones = extras.getStringArray("timezones");
         int size = sourceKeys == null ? -1 : sourceKeys.length;
         if (size <= 0 || size > 64 || kinds == null || starts == null || ends == null
-                || values == null || distances == null || calories == null || timezones == null
+                || values == null || distances == null || calories == null || stages == null
+                || completes == null || timezones == null
                 || kinds.length != size || starts.length != size || ends.length != size
                 || values.length != size || distances.length != size || calories.length != size
-                || timezones.length != size) {
+                || stages.length != size || completes.length != size || timezones.length != size) {
             throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_INVALID");
         }
 
@@ -266,7 +269,8 @@ public final class HealthQueueProvider extends ContentProvider {
         if (store.confirmedAccountHash() == null) return status("HEALTH_ACCOUNT_UNCONFIRMED");
 
         ArrayList<Measurement> batch = new ArrayList<>(size);
-        Set<String> supported = Set.of("steps_interval", "heart_rate", "spo2", "stress");
+        Set<String> supported = Set.of("steps_interval", "heart_rate", "spo2", "stress",
+                "sleep_interval", "sleep_stage");
         for (int i = 0; i < size; i++) {
             String source = sourceKeys[i];
             String kind = kinds[i];
@@ -274,8 +278,14 @@ public final class HealthQueueProvider extends ContentProvider {
                     || starts[i] < 0 || ends[i] <= starts[i]) {
                 throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID");
             }
-            if (!"steps_interval".equals(kind) && ends[i] - starts[i] != 60_000L) {
+            boolean sleepInterval = "sleep_interval".equals(kind);
+            boolean sleepStage = "sleep_stage".equals(kind);
+            if (!"steps_interval".equals(kind) && !sleepInterval && !sleepStage
+                    && ends[i] - starts[i] != 60_000L) {
                 throw new IllegalArgumentException("HEALTH_MIRROR_INTERVAL_INVALID");
+            }
+            if (sleepStage && (stages[i] < 2 || stages[i] > 5)) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_STAGE_INVALID");
             }
             JSONObject row = new JSONObject();
             try {
@@ -284,18 +294,18 @@ public final class HealthQueueProvider extends ContentProvider {
                 row.put("kind", kind);
                 row.put("startMs", starts[i]);
                 row.put("endMs", ends[i]);
-                row.put("value", values[i]);
-                row.put("stage", JSONObject.NULL);
+                row.put("value", sleepInterval || sleepStage ? JSONObject.NULL : values[i]);
+                row.put("stage", sleepStage ? stages[i] : JSONObject.NULL);
                 if (timezones[i] != null && !timezones[i].isBlank()) row.put("timezone", timezones[i]);
-                row.put("measurementMode", "continuous");
-                row.put("complete", false);
+                row.put("measurementMode", sleepInterval || sleepStage ? "sleep" : "continuous");
+                row.put("complete", sleepInterval && completes[i]);
                 if ("steps_interval".equals(kind)) {
                     if (distances[i] >= 0) row.put("distance", distances[i]);
                     if (calories[i] >= 0) row.put("calories", calories[i]);
                 }
                 row.put("sourceFingerprint", sha256(kind + "|" + starts[i] + "|" + ends[i]
                         + "|" + values[i] + "|" + distances[i] + "|" + calories[i]
-                        + "|" + timezones[i]));
+                        + "|" + stages[i] + "|" + completes[i] + "|" + timezones[i]));
                 batch.add(Measurement.fromJson(row));
             } catch (org.json.JSONException invalid) {
                 throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID", invalid);
