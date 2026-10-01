@@ -319,29 +319,55 @@ public final class MainActivity extends AppCompatActivity {
         updateControls();
     }
 
+    /** A fresh reply proves the hook is executing in the current Mi Fitness process. */
+    private boolean lspHookLiveNow() {
+        var prefs = getSharedPreferences("ownership-hook", MODE_PRIVATE);
+        if (prefs.getInt("api", 0) < 102
+                || prefs.getLong("versionCode", 0) != BuildConfig.VERSION_CODE) return false;
+        long seen = prefs.getLong("lastSeenMs", 0);
+        long age = System.currentTimeMillis() - seen;
+        return seen > 0 && age >= 0 && age <= 5_000;
+    }
+
+    private void pingLspHook() {
+        try { getContentResolver().notifyChange(OwnershipProvider.URI, null); }
+        catch (RuntimeException ignored) {}
+    }
+
     private void verifyLsp() {
         if (checkingLsp || changingOwnership) return;
         checkingLsp = true;
-        refreshLspVerification();
-        if (lspVerified) {
-            checkingLsp = false;
-            ownershipStatus.setText("LSPosed API 102 注入已验证。");
-            return;
-        }
-        Intent launch = getPackageManager().getLaunchIntentForPackage(HostIdentity.MI_PACKAGE);
-        if (launch == null) {
-            checkingLsp = false;
-            ownershipStatus.setText("未找到小米运动健康，无法验证 LSPosed 注入。");
-            return;
-        }
-        ownershipStatus.setText("正在验证 LSPosed：请让小米运动健康启动一次，然后返回这里。");
-        startActivity(launch);
+        ownershipStatus.setText("正在确认 LSPosed API 102 Hook…");
+        pingLspHook();
         main.postDelayed(() -> {
             if (isDestroyed()) return;
-            checkingLsp = false;
             refreshLspVerification();
-            if (lspVerified) ownershipStatus.setText("LSPosed API 102 注入已验证。");
-        }, 1200);
+            if (lspHookLiveNow()) {
+                checkingLsp = false;
+                ownershipStatus.setText("LSPosed API 102 Hook 已实时确认。");
+                return;
+            }
+            Intent launch = getPackageManager().getLaunchIntentForPackage(HostIdentity.MI_PACKAGE);
+            if (launch == null) {
+                checkingLsp = false;
+                ownershipStatus.setText("未找到小米运动健康，无法验证 LSPosed 注入。");
+                return;
+            }
+            ownershipStatus.setText("正在打开小米运动健康以载入 Hook；返回后会自动确认。");
+            startActivity(launch);
+            main.postDelayed(() -> {
+                if (isDestroyed()) return;
+                pingLspHook();
+                main.postDelayed(() -> {
+                    if (isDestroyed()) return;
+                    checkingLsp = false;
+                    refreshLspVerification();
+                    ownershipStatus.setText(lspHookLiveNow()
+                            ? "LSPosed API 102 Hook 已实时确认。"
+                            : "未收到 LSPosed Hook 回应。请检查模块开关和小米运动健康作用域。");
+                }, 250);
+            }, 1_000);
+        }, 250);
     }
 
     private void refreshOwnership() {
@@ -387,7 +413,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private void changeOwnership(Change change) {
         if (worker.isShutdown() || changingOwnership) return;
-        if (!lspVerified) {
+        boolean takingOver = change == Change.ADD || change == Change.RECONNECT;
+        if (takingOver && (!lspVerified || !lspHookLiveNow())) {
             verifyLsp();
             return;
         }
