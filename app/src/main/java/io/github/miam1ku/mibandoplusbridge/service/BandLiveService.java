@@ -212,10 +212,7 @@ public final class BandLiveService extends Service {
         if (diagnosticPaused) return "OPEN_CONFIG_REQUIRED";
         if (!context.getSystemService(android.os.UserManager.class).isUserUnlocked()) return "OPEN_CONFIG_REQUIRED";
         if (!new BandStateRepository(context).isRegistered()) return "DEVICE_NOT_REGISTERED";
-        var ownership = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
-        if (!"NATIVE".equals(ownership.getString("mode", "OFFICIAL"))
-                || !ownership.getBoolean("ownsDisable", false)
-                || ownership.getBoolean("officialRestored", false)) return "NATIVE_OWNERSHIP_REQUIRED";
+        if (!new OwnershipController(context).nativeReady()) return "NATIVE_OWNERSHIP_REQUIRED";
         BandLiveService live = instance;
         if (live != null && !live.stopRequested) {
             live.syncRequested = true;
@@ -273,9 +270,7 @@ public final class BandLiveService extends Service {
         BandLiveService live = instance;
         if (live == null || live.stopRequested || live.commands == null
                 || !new BandStateRepository(context).isRegistered()) return false;
-        var owner = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
-        return "NATIVE".equals(owner.getString("mode", "OFFICIAL"))
-                && owner.getBoolean("ownsDisable", false) && !owner.getBoolean("officialRestored", false);
+        return new OwnershipController(context).nativeReady();
     }
     private static String sessionReason(Context context) {
         BandLiveService live = instance;
@@ -284,8 +279,7 @@ public final class BandLiveService extends Service {
         var owner = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
         return "session registered=" + registered
                 + " mode=" + owner.getString("mode", "OFFICIAL")
-                + " ownsDisable=" + owner.getBoolean("ownsDisable", false)
-                + " restored=" + owner.getBoolean("officialRestored", false);
+                + " hookExclusive=" + owner.getBoolean("hookExclusive", false);
     }
 
     public static boolean callsOwned() {
