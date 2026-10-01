@@ -143,8 +143,12 @@ public final class MiFitnessOwnershipHook {
     private static void signalOnline() {
         Context context = hostContext;
         if (context == null) return;
-        try { context.getContentResolver().call(OwnershipProvider.URI, "hookOnline", null, null); }
-        catch (RuntimeException ignored) {}
+        try {
+            Bundle extras = new Bundle();
+            extras.putInt("api", 102);
+            extras.putLong("versionCode", io.github.miam1ku.mibandoplusbridge.BuildConfig.VERSION_CODE);
+            context.getContentResolver().call(OwnershipProvider.URI, "hookOnline", null, extras);
+        } catch (RuntimeException ignored) {}
     }
 
     private static void releaseOfficialLinks() {
