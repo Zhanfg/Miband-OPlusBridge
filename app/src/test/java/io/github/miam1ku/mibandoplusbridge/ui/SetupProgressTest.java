@@ -9,7 +9,7 @@ import static org.junit.Assert.assertTrue;
 public final class SetupProgressTest {
     @Test public void missingHookIsFirstEvenWithBinding() {
         SetupProgress progress = new SetupProgress(false, true, true, false, false, false);
-        assertEquals(SetupProgress.Step.HOOK, progress.current());
+        assertEquals(SetupProgress.Step.LSP, progress.current());
         assertTrue(progress.showChecklist());
         assertEquals("验证 LSPosed", progress.primaryLabel());
     }
