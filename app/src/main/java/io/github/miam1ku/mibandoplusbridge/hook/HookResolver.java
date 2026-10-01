@@ -157,6 +157,10 @@ final class HookResolver {
         Candidate(Method method) { this.method = method; }
     }
 
+    static List<String> classNames(String apk) throws IOException {
+        return cachedClassNames(apk);
+    }
+
     private static List<String> cachedClassNames(String apk) throws IOException {
         String key = fingerprint(apk);
         synchronized (CLASS_CACHE) {
