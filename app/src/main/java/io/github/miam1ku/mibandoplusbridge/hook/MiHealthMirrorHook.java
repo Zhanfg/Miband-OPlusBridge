@@ -3,14 +3,18 @@ package io.github.miam1ku.mibandoplusbridge.hook;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
+import io.github.miam1ku.mibandoplusbridge.integration.OwnershipProvider;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -25,7 +29,11 @@ public final class MiHealthMirrorHook {
     private static final long BACKFILL_WINDOW_SECONDS = 48L * 60L * 60L;
     private static volatile ThreadPoolExecutor writer;
     private static volatile Backfill backfill;
+    private static volatile DeviceGate deviceGate;
     private static volatile long lastBackfillGeneration = -1;
+    private static final Object SID_LOCK = new Object();
+    private static final Set<String> targetSids = new HashSet<>();
+    private static volatile long targetSyncUntilElapsed;
 
     private MiHealthMirrorHook() {}
 
