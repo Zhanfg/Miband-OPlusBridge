@@ -96,6 +96,26 @@ public final class OwnershipController {
         }
     }
 
+    /** Event-only sync request while Mi Fitness remains the transport owner. */
+    public synchronized long requestCoexistSync() throws Failure {
+        GATE.writeLock().lock();
+        try {
+            requireUnlocked();
+            if (!coexistReady()) throw new Failure("COEXIST_NOT_READY");
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit().putLong("generation", generation).commit()) {
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
+            return generation;
+        } finally {
+            GATE.writeLock().unlock();
+        }
+    }
+
     public synchronized void takeOver() throws Failure {
         GATE.writeLock().lock();
         try {
