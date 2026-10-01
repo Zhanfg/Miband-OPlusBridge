@@ -27,8 +27,13 @@ public final class OwnershipProvider extends ContentProvider {
             throw new SecurityException("OWNERSHIP_OPERATION_UNSUPPORTED");
         }
         if ("hookOnline".equals(method) && !self) {
+            int api = extras == null ? 0 : extras.getInt("api", 0);
+            long version = extras == null ? 0 : extras.getLong("versionCode", 0);
             getContext().getSharedPreferences("ownership-hook", 0).edit()
-                    .putLong("lastSeenMs", System.currentTimeMillis()).apply();
+                    .putLong("lastSeenMs", System.currentTimeMillis())
+                    .putInt("api", api)
+                    .putLong("versionCode", version)
+                    .apply();
         }
         LocalPrefs state = LocalPrefs.open(getContext(), "ownership");
         Bundle result = new Bundle();
@@ -37,6 +42,10 @@ public final class OwnershipProvider extends ContentProvider {
                 && state.getBoolean("hookExclusive", false));
         result.putLong("generation", state.getLong("generation", 0));
         result.putString("mac", LocalPrefs.open(getContext(), "band-state").getString("mac", ""));
+        var hook = getContext().getSharedPreferences("ownership-hook", 0);
+        result.putInt("hookApi", hook.getInt("api", 0));
+        result.putLong("hookVersionCode", hook.getLong("versionCode", 0));
+        result.putLong("hookLastSeenMs", hook.getLong("lastSeenMs", 0));
         return result;
     }
 
