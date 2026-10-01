@@ -442,14 +442,17 @@ public final class MainActivity extends AppCompatActivity {
                         registrationSaved = true;
                     }
                     if (!repository.isRegistered()) throw new IllegalStateException("DEVICE_NOT_REGISTERED");
-                    if (!owner.nativeReady()) owner.takeOver();
-                    if (!repository.isRegistered() || !owner.nativeReady()) {
-                        throw new IllegalStateException("NATIVE_OWNERSHIP_REQUIRED");
+                    CompanionPresence.stopObserving(this);
+                    BandLiveService.stop(this);
+                    if (!SppDiagnosticClient.stopAllAndWait()) {
+                        throw new OwnershipController.Failure("DIAGNOSTIC_SOCKET_STILL_ACTIVE");
                     }
-                    CompanionPresence.ensureObserving(this);
-                    BandLiveService.start(this);
-                    BandLiveService.requestSync(this);
-                    message = "设备已登记，正在连接。";
+                    repository.disconnected();
+                    if (!owner.coexistReady()) owner.enableCoexist();
+                    if (!repository.isRegistered() || !owner.coexistReady()) {
+                        throw new IllegalStateException("COEXIST_OWNERSHIP_REQUIRED");
+                    }
+                    message = "设备已登记，共存模式已启用；小米运动健康继续托管连接。";
                 } else {
                     if (change == Change.REMOVE) {
                         repository.unregisterDevice();
