@@ -3,8 +3,6 @@ package io.github.miam1ku.mibandoplusbridge.service;
 
 import android.content.Context;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Health wakes the live service. The live service wakes health. Root is the background-start fallback. */
@@ -12,11 +10,17 @@ public final class HostKeepAlive {
     static final long ROOT_GAP_MS = 15_000;
     private static final AtomicLong bridgeRootAt = new AtomicLong();
     private static final AtomicLong healthRootAt = new AtomicLong();
-    private static final ExecutorService root = Executors.newSingleThreadExecutor(task -> {
-        Thread thread = new Thread(task, "OplusBandWake");
-        thread.setDaemon(true);
-        return thread;
-    });
+    /**
+     * Wake work is bursty. A zero-core executor tears its helper thread down after the
+     * short keep-alive instead of leaving an otherwise idle process thread behind.
+     */
+    private static final java.util.concurrent.ThreadPoolExecutor root =
+            new java.util.concurrent.ThreadPoolExecutor(0, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
+                    new java.util.concurrent.LinkedBlockingQueue<>(), task -> {
+                        Thread thread = new Thread(task, "OplusBandWake");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
 
     private HostKeepAlive() {}
 
