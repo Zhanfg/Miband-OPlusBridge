@@ -494,10 +494,11 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (CompanionPresence.associationId(this) >= 0) {
-            boolean observing = CompanionPresence.ensureObserving(this);
+            boolean nativeReady = new OwnershipController(this).nativeReady();
+            boolean observing = nativeReady && CompanionPresence.ensureObserving(this);
             ownershipStatus.setText(observing
                     ? "系统配套设备保活已启用。手环出现或蓝牙连接时由系统唤醒桥接。"
-                    : "系统关联存在，但 presence observer 未能启用。");
+                    : "系统关联已存在；桥接接管手环后会自动启用低功耗保活。");
             refreshCompanionStatus();
             return;
         }
@@ -508,8 +509,11 @@ public final class MainActivity extends AppCompatActivity {
 
             @Override public void onAssociated() {
                 if (isDestroyed()) return;
-                CompanionPresence.ensureObserving(MainActivity.this);
-                ownershipStatus.setText("系统配套设备关联完成。已启用低功耗保活。");
+                boolean observing = new OwnershipController(MainActivity.this).nativeReady()
+                        && CompanionPresence.ensureObserving(MainActivity.this);
+                ownershipStatus.setText(observing
+                        ? "系统配套设备关联完成。已启用低功耗保活。"
+                        : "系统配套设备关联完成；桥接接管后会自动启用保活。");
                 refreshCompanionStatus();
             }
 
