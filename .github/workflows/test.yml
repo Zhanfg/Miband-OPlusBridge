@@ -41,3 +41,15 @@ jobs:
             echo "legacy xposed_init must not be packaged" >&2
             exit 1
           fi
+      - name: Reject root-shell and legacy Xposed regressions
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'ProcessBuilder\("su"|pm disable-user|cmd deviceidle|rootStart\(|probeRoot\(' \
+              app/src/main/java app/src/test/java 2>/dev/null; then
+            echo "root-shell compatibility path reintroduced" >&2
+            exit 1
+          fi
+          if grep -R -n 'de\.robv\.android\.xposed' app/src/main/java 2>/dev/null; then
+            echo "legacy Xposed runtime API reintroduced" >&2
+            exit 1
+          fi
