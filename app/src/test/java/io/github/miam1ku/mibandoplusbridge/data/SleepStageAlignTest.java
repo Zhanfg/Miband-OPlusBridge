@@ -34,6 +34,15 @@ public final class SleepStageAlignTest {
         assertEquals(0, older.get(0).startMs());
     }
 
+    @Test public void indexedOverlapHandlesUnsortedNestedIntervals() {
+        var newer = List.of(interval(80, 120), interval(10, 90), interval(20, 30), interval(200, 250));
+        assertTrue(SleepStageAlign.claim(List.of(interval(0, 15)), newer).isEmpty());
+        assertTrue(SleepStageAlign.claim(List.of(interval(95, 100)), newer).isEmpty());
+        assertEquals(1, SleepStageAlign.claim(List.of(interval(121, 199)), newer).size());
+        assertTrue(SleepStageAlign.withStages(
+                List.of(interval(0, 100)), List.of(interval(90, 110), interval(1, 2))).size() == 1);
+    }
+
     private static SleepStageAlign.Interval interval(long start, long end) {
         return new SleepStageAlign.Interval(start, end);
     }
