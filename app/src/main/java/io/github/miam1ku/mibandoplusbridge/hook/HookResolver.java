@@ -2,6 +2,7 @@
 package io.github.miam1ku.mibandoplusbridge.hook;
 
 import android.content.Context;
+import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -9,6 +10,9 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Version-adaptive resolver for vendor hooks.
@@ -22,8 +26,33 @@ final class HookResolver {
             new LinkedHashMap<>(16, 0.75f, true);
     private static final LinkedHashMap<String, List<DexAnchors.MethodRef>> ANCHOR_CACHE =
             new LinkedHashMap<>(16, 0.75f, true);
+    private static final Set<String> ADAPTATIONS = ConcurrentHashMap.newKeySet();
 
     private HookResolver() {}
+
+    static void resetDiagnostics() {
+        ADAPTATIONS.clear();
+    }
+
+    static String diagnosticSummary() {
+        TreeSet<String> ordered = new TreeSet<>(ADAPTATIONS);
+        if (ordered.isEmpty()) return "adaptations=0";
+        StringBuilder text = new StringBuilder("adaptations=").append(ordered.size());
+        for (String item : ordered) {
+            if (text.length() + item.length() + 1 > 480) {
+                text.append(" ...");
+                break;
+            }
+            text.append(' ').append(item);
+        }
+        return text.toString();
+    }
+
+    private static void noteAdaptation(String kind, String stable, String actual) {
+        if (stable == null || actual == null || stable.equals(actual)) return;
+        String item = kind + ":" + stable + "->" + actual;
+        if (ADAPTATIONS.add(item)) Log.i("OplusBandBridge", "DEX_ADAPTED " + item);
+    }
 
     static Class<?> resolveClass(Context context, ClassLoader loader, String stableName,
             String packagePrefix, Class<?>... signature) throws ClassNotFoundException {
@@ -56,7 +85,10 @@ final class HookResolver {
                     }
                 } catch (IOException ignored) { }
             }
-            if (found != null) return found;
+            if (found != null) {
+                noteAdaptation("class-signature", stableName, found.getName());
+                return found;
+            }
             throw missing;
         }
     }
@@ -99,7 +131,10 @@ final class HookResolver {
                     }
                 } catch (IOException ignored) { }
             }
-            if (found != null) return found;
+            if (found != null) {
+                noteAdaptation("class-members", stableName, found.getName());
+                return found;
+            }
             throw missing;
         }
     }
@@ -129,6 +164,8 @@ final class HookResolver {
         }
         if (found == null) throw new NoSuchMethodException(owner.getName() + "#" + stableName);
         found.setAccessible(true);
+        noteAdaptation("method", owner.getName() + "#" + stableName,
+                owner.getName() + "#" + found.getName());
         return found;
     }
 
@@ -187,6 +224,8 @@ final class HookResolver {
             }
             if (best != null && !tie) {
                 best.method.setAccessible(true);
+                noteAdaptation("literal", stableClass + "#" + stableMethod,
+                        best.method.getDeclaringClass().getName() + "#" + best.method.getName());
                 return best.method;
             }
             if (tie) throw new NoSuchMethodException("DEX_LITERAL_ANCHOR_AMBIGUOUS " + literals);
