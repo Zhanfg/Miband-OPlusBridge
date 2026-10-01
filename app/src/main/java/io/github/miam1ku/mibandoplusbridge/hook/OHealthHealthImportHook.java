@@ -45,7 +45,10 @@ public final class OHealthHealthImportHook {
     private final HostContract host;
     private final OHealthSleepWriter sleep;
     private final OHealthStepWriter steps;
+    private final HandlerThread thread;
     private final Handler worker;
+    private ContentObserver queueObserver;
+    private ContentObserver recordsObserver;
     private final AtomicBoolean scheduled = new AtomicBoolean();
     private final AtomicReference<String> observedAccount = new AtomicReference<>();
     private final AtomicReference<Object> observedApi = new AtomicReference<>();
@@ -62,7 +65,7 @@ public final class OHealthHealthImportHook {
         this.host = host;
         this.sleep = sleep;
         this.steps = steps;
-        HandlerThread thread = new HandlerThread("OplusBandHealthImport");
+        thread = new HandlerThread("OplusBandHealthImport");
         thread.start();
         worker = new Handler(thread.getLooper());
     }
@@ -101,15 +104,40 @@ public final class OHealthHealthImportHook {
         hook.request();
     }
 
+    public static synchronized void detach() {
+        OHealthHealthImportHook hook = installed;
+        installed = null;
+        if (hook != null) hook.close();
+    }
+
+    private void close() {
+        scheduled.set(false);
+        worker.removeCallbacksAndMessages(null);
+        if (queueObserver != null) {
+            try { context.getContentResolver().unregisterContentObserver(queueObserver); }
+            catch (RuntimeException ignored) {}
+            queueObserver = null;
+        }
+        if (recordsObserver != null) {
+            try { context.getContentResolver().unregisterContentObserver(recordsObserver); }
+            catch (RuntimeException ignored) {}
+            recordsObserver = null;
+        }
+        observedAccount.set(null);
+        observedApi.set(null);
+        thread.quit();
+    }
+
     private void observe() {
-        context.getContentResolver().registerContentObserver(HealthQueueProvider.URI, false,
-                new ContentObserver(null) {
-                    @Override public void onChange(boolean selfChange) { request(); }
-                });
-        context.getContentResolver().registerContentObserver(HealthQueueProvider.RECORDS_URI, true,
-                new ContentObserver(null) {
-                    @Override public void onChange(boolean selfChange) { request(); }
-                });
+        queueObserver = new ContentObserver(null) {
+            @Override public void onChange(boolean selfChange) { request(); }
+        };
+        recordsObserver = new ContentObserver(null) {
+            @Override public void onChange(boolean selfChange) { request(); }
+        };
+        context.getContentResolver().registerContentObserver(HealthQueueProvider.URI, false, queueObserver);
+        context.getContentResolver().registerContentObserver(
+                HealthQueueProvider.RECORDS_URI, true, recordsObserver);
         XposedBridge.hookMethod(host.accountGetter, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 // Cache the id OHealth already returned. Never call getSsoId.
