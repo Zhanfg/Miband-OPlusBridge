@@ -132,17 +132,7 @@ public final class EntryPoint extends XposedModule {
                     Context context = currentApplication();
                     if (context != null) installHealth(context, loader);
                 } else {
-                    try {
-                        XposedHelpers.findAndHookMethod("com.heytap.health.SportHealthApplication", loader,
-                                "onCreate", new XC_MethodHook() {
-                                    @Override protected void afterHookedMethod(MethodHookParam param) {
-                                        if (param.hasThrowable()) return;
-                                        installHealth((Context) param.thisObject, loader);
-                                    }
-                                });
-                    } catch (Throwable ignored) {
-                        // Application.attach fallback below remains authoritative.
-                    }
+                    // Application.attach is earlier and stable across OHealth application-class renames.
                     hookAttach(loader, (context) -> installHealth(context, loader));
                 }
                 return;
