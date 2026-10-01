@@ -770,14 +770,22 @@ public final class OHealthDeviceHook {
      * Project this band's connection and battery, and drop watch-face/OTA rows.
      */
     private static void installNativePanel(ClassLoader loader) {
+        Class<?> panelActivity = null;
         try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity", loader,
-                    "showNewFunctionItem", new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (panelIsBand(param.thisObject)) param.setResult(false);
-                        }
-                    });
+            panelActivity = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity",
+                    "com.heytap.health.linkage.", android.app.Activity.class,
+                    new String[]{"showNewFunctionItem", "notifyDeviceInfoBeans"},
+                    new String[]{"mMac", "mDeviceId"});
+            XposedBridge.hookMethod(HookResolver.resolveMethod(panelActivity,
+                    "showNewFunctionItem", boolean.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (panelIsBand(param.thisObject)) param.setResult(false);
+                }
+            });
+            if (!"com.heytap.health.linkage.ui.DeviceDetailsPanelActivity".equals(panelActivity.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_ACTIVITY_ADAPTED " + panelActivity.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_PANEL_FUNCTION_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
@@ -845,34 +853,42 @@ public final class OHealthDeviceHook {
             } catch (Throwable ignored) { }
         }
         try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsActivity", loader,
-                    "actionClick", Integer.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (!(param.thisObject instanceof android.app.Activity activity)) return;
-                            if (!panelIsBand(activity)) return;
-                            if (!(param.args[0] instanceof Integer action) || action != 4) return;
-                            if (!openHealthApp(activity)) return;
-                            param.setResult(null);
-                        }
-                    });
+            Class<?> detailsActivity = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.linkage.ui.DeviceDetailsActivity",
+                    "com.heytap.health.linkage.", android.app.Activity.class,
+                    new String[]{"actionClick"}, new String[]{"mMac", "mDeviceId"});
+            XposedBridge.hookMethod(HookResolver.resolveMethod(detailsActivity,
+                    "actionClick", null, Integer.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!(param.thisObject instanceof android.app.Activity activity)) return;
+                    if (!panelIsBand(activity)) return;
+                    if (!(param.args[0] instanceof Integer action) || action != 4) return;
+                    if (!openHealthApp(activity)) return;
+                    param.setResult(null);
+                }
+            });
+            if (!"com.heytap.health.linkage.ui.DeviceDetailsActivity".equals(detailsActivity.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_DETAILS_ACTIVITY_ADAPTED "
+                        + detailsActivity.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_PANEL_APP_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
         }
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsPanelActivity", loader,
-                    "notifyDeviceInfoBeans", List.class, new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            if (!panelIsBand(param.thisObject)) return;
-                            stripWatchFace(param.thisObject, "datas", "adapter");
-                            stripWatchFace(param.thisObject, "landscapeRightDatas", "landscapeRightAdapter");
-                        }
-                    });
-        } catch (Throwable failure) {
-            Log.i("OplusBandBridge", "OHEALTH_PANEL_WATCHFACE_UNAVAILABLE "
-                    + failure.getClass().getSimpleName());
+        if (panelActivity != null) {
+            try {
+                XposedBridge.hookMethod(HookResolver.resolveMethod(panelActivity,
+                        "notifyDeviceInfoBeans", null, List.class), new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        if (!panelIsBand(param.thisObject)) return;
+                        stripWatchFace(param.thisObject, "datas", "adapter");
+                        stripWatchFace(param.thisObject, "landscapeRightDatas", "landscapeRightAdapter");
+                    }
+                });
+            } catch (Throwable failure) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_WATCHFACE_UNAVAILABLE "
+                        + failure.getClass().getSimpleName());
+            }
         }
         try {
             XposedHelpers.findAndHookMethod(
