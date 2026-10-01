@@ -748,10 +748,12 @@ public final class OHealthDeviceHook {
         }
         Class<?> detailViewModel = null;
         try {
-            detailViewModel = DexAnchors.resolveClass(hostContext, loader,
+            detailViewModel = DexAnchors.resolveClassBySignatures(hostContext, loader,
                     "com.heytap.health.linkage.ui.DeviceDetailsViewModel",
                     "com.heytap.health.linkage.",
-                    String.class, String.class, String.class, String.class, boolean.class, boolean.class);
+                    new Class<?>[] {String.class, String.class, String.class, String.class,
+                            boolean.class, boolean.class},
+                    new Class<?>[] {boolean.class, String.class, boolean.class, boolean.class});
             if (!"com.heytap.health.linkage.ui.DeviceDetailsViewModel".equals(detailViewModel.getName())) {
                 Log.i("OplusBandBridge", "OHEALTH_PANEL_VM_ADAPTED " + detailViewModel.getName());
             }
