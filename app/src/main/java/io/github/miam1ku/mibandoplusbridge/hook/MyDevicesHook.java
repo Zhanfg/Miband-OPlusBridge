@@ -111,6 +111,16 @@ public final class MyDevicesHook {
         Log.i(TAG, "DEVICE_CARD_BIND cache=" + cache.getName()
                 + " register=" + register.getName()
                 + " observer=" + observerType.getName());
+        signalProjectionOnline(context, "device-card-bind:" + cache.getName());
+    }
+
+    private static void signalProjectionOnline(Context context, String stage) {
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putString("stage", stage);
+            context.getContentResolver().call(DeviceCardProvider.URI,
+                    "projectionOnline", null, extras);
+        } catch (RuntimeException ignored) { }
     }
 
     /** 设备空间读到的就是这份缓存。16 的方法名是 {@code j}，17 是 {@code f}，返回类型没变。 */
