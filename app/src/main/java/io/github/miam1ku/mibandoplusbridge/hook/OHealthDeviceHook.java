@@ -51,9 +51,9 @@ public final class OHealthDeviceHook {
         if (hostContext == null) hostContext = context;
         if (!HOST.equals(context.getPackageName())) return;
         main = new Handler(Looper.getMainLooper());
-        Class<?> controllerClass = DexAnchors.resolveClass(hostContext, loader, CONTROLLER,
+        Class<?> controllerClass = HookResolver.resolveClass(hostContext, loader, CONTROLLER,
                 "com.heytap.health.device.tab.", List.class, List.class, String.class);
-        Method refreshWearable = DexAnchors.resolveMethod(controllerClass,
+        Method refreshWearable = HookResolver.resolveMethod(controllerClass,
                 "refreshWearableDeviceList", null, List.class, List.class, String.class);
         if (!CONTROLLER.equals(controllerClass.getName())
                 || !"refreshWearableDeviceList".equals(refreshWearable.getName())) {
@@ -92,7 +92,7 @@ public final class OHealthDeviceHook {
         try {
             Class<?> eventType = XposedHelpers.findClass(
                     "com.heytap.health.device.flexadapter.refresh.EventType", loader);
-            XposedBridge.hookMethod(DexAnchors.resolveMethod(controllerClass,
+            XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "refreshView", null, eventType), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     remember(param.thisObject);
@@ -105,7 +105,7 @@ public final class OHealthDeviceHook {
         }
         Class<?> infoClass = XposedHelpers.findClass(INFO, loader);
         try {
-            XposedBridge.hookMethod(DexAnchors.resolveMethod(controllerClass,
+            XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "checkDeviceIsDisable", boolean.class, infoClass), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (isBand(param.args.length == 0 ? null : param.args[0])) param.setResult(false);
@@ -116,7 +116,7 @@ public final class OHealthDeviceHook {
                     + moved.getClass().getSimpleName());
         }
         try {
-            XposedBridge.hookMethod(DexAnchors.resolveMethod(controllerClass,
+            XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "doConnect", null, infoClass, String.class), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (!isBand(param.args.length == 0 ? null : param.args[0])) return;
@@ -141,7 +141,7 @@ public final class OHealthDeviceHook {
                     }
                 });
         try {
-            XposedBridge.hookMethod(DexAnchors.resolveMethod(controllerClass,
+            XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
                     "resetCurrSelectMac", null), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     remember(param.thisObject);
@@ -533,7 +533,7 @@ public final class OHealthDeviceHook {
 
     private static void installNotifyExtras(ClassLoader loader) {
         try {
-            Method notifySuccess = DexAnchors.resolveAnchoredMethod(hostContext, loader,
+            Method notifySuccess = HookResolver.resolveAnchoredMethod(hostContext, loader,
                     "com.heytap.health.device.tab.notify.NotifySettingsActivity",
                     "showSuccessFragment", "settingsDeviceMacBundle",
                     android.app.Activity.class, null);
@@ -748,7 +748,7 @@ public final class OHealthDeviceHook {
         }
         Class<?> detailViewModel = null;
         try {
-            detailViewModel = DexAnchors.resolveClassBySignatures(hostContext, loader,
+            detailViewModel = HookResolver.resolveClassBySignatures(hostContext, loader,
                     "com.heytap.health.linkage.ui.DeviceDetailsViewModel",
                     "com.heytap.health.linkage.",
                     new Class<?>[] {String.class, String.class, String.class, String.class,
@@ -763,7 +763,7 @@ public final class OHealthDeviceHook {
         }
         if (detailViewModel != null) {
             try {
-                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                XposedBridge.hookMethod(HookResolver.resolveMethod(detailViewModel,
                         "initData", null, String.class, String.class, String.class, String.class,
                         boolean.class, boolean.class), new XC_MethodHook() {
                     @Override protected void afterHookedMethod(MethodHookParam param) {
@@ -777,7 +777,7 @@ public final class OHealthDeviceHook {
                         + failure.getClass().getSimpleName());
             }
             try {
-                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                XposedBridge.hookMethod(HookResolver.resolveMethod(detailViewModel,
                         "getData", null, boolean.class, String.class, boolean.class, boolean.class),
                         new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
@@ -797,7 +797,7 @@ public final class OHealthDeviceHook {
                         + failure.getClass().getSimpleName());
             }
             try {
-                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                XposedBridge.hookMethod(HookResolver.resolveMethod(detailViewModel,
                         "reconnectDevice", null), new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
                         if (!ourBand(XposedHelpers.getObjectField(param.thisObject, "mMac"),
