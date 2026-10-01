@@ -436,7 +436,6 @@ public final class MainActivity extends AppCompatActivity {
             try {
                 if (change == Change.ADD || change == Change.RECONNECT) {
                     if (!isUnlocked()) throw new IllegalStateException("USER_LOCKED");
-                    if (!hasBluetoothPermission()) throw new IllegalStateException("NEARBY_PERMISSION_REQUIRED");
                     if (change == Change.ADD) {
                         repository.registerDevice();
                         registrationSaved = true;
