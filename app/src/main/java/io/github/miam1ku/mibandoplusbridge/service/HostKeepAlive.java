@@ -29,21 +29,21 @@ public final class HostKeepAlive {
     public static void startBridgeAsync(Context context) {
         if (context == null) return;
         Context app = context.getApplicationContext();
-        if (!claim(bridgeRootAt, System.currentTimeMillis(), ROOT_GAP_MS)) return;
+        if (!claim(bridgeRootAt, android.os.SystemClock.elapsedRealtime(), ROOT_GAP_MS)) return;
         root.execute(() -> runBridge(app));
     }
 
     /** Package-replaced recovery. The caller is already off the main thread. */
     public static void startBridge(Context context) {
         if (context == null) return;
-        if (!claim(bridgeRootAt, System.currentTimeMillis(), ROOT_GAP_MS)) return;
+        if (!claim(bridgeRootAt, android.os.SystemClock.elapsedRealtime(), ROOT_GAP_MS)) return;
         runBridge(context.getApplicationContext());
     }
 
     public static void startHealthAsync(Context context, Runnable after) {
         if (context == null || !BandLiveService.mayWake(context)) return;
         Context app = context.getApplicationContext();
-        if (!claim(healthRootAt, System.currentTimeMillis(), ROOT_GAP_MS)) return;
+        if (!claim(healthRootAt, android.os.SystemClock.elapsedRealtime(), ROOT_GAP_MS)) return;
         root.execute(() -> {
             boolean started = OwnershipController.rootStart(
                     "com.heytap.health", "com.heytap.health.rpc.host.HealthRpcMsgService", false);
@@ -52,11 +52,12 @@ public final class HostKeepAlive {
         });
     }
 
-    static boolean claim(AtomicLong last, long nowMs, long gapMs) {
+    static boolean claim(AtomicLong last, long nowElapsedMs, long gapMs) {
         while (true) {
             long previous = last.get();
-            if (previous != 0 && nowMs - previous < gapMs) return false;
-            if (last.compareAndSet(previous, nowMs)) return true;
+            long elapsed = nowElapsedMs - previous;
+            if (previous != 0 && elapsed >= 0 && elapsed < gapMs) return false;
+            if (last.compareAndSet(previous, nowElapsedMs)) return true;
         }
     }
 
