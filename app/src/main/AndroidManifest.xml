@@ -119,6 +119,10 @@
             android:authorities="io.github.miam1ku.mibandoplusbridge.notify"
             android:exported="true" android:directBootAware="false"
             android:grantUriPermissions="false" />
+        <provider android:name=".integration.OwnershipProvider"
+            android:authorities="io.github.miam1ku.mibandoplusbridge.ownership"
+            android:exported="true" android:directBootAware="false"
+            android:grantUriPermissions="false" />
         <provider android:name=".integration.PhoneAlarmProvider"
             android:authorities="io.github.miam1ku.mibandoplusbridge.phone-alarm"
             android:exported="true" android:grantUriPermissions="false" />
