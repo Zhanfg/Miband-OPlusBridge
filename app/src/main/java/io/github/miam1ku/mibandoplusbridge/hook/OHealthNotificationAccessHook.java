@@ -86,8 +86,10 @@ public final class OHealthNotificationAccessHook {
                         if (context != null && granted(context)) param.setResult(true);
                     }
                 });
-        Class<?> item = Class.forName(
-                "com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem", false, loader);
+        Class<?> item = HookResolver.resolveClassByMembers(hostContext, loader,
+                "com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem",
+                "com.heytap.health.device.tab.itemview.wearable.", null,
+                new String[]{"initData", "getController", "getMTvRight"}, new String[0]);
         XposedBridge.hookAllMethods(item, "initData", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 try {
@@ -97,6 +99,9 @@ public final class OHealthNotificationAccessHook {
                 } catch (Throwable ignored) { }
             }
         });
+        if (!"com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem".equals(item.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_ITEM_ADAPTED " + item.getName());
+        }
     }
 
     private static Context contextArg(XC_MethodHook.MethodHookParam param) {
