@@ -34,8 +34,8 @@ public final class OHealthMusicHook {
         if (receiver != null || app != null) return;
         String process = android.app.Application.getProcessName();
         if (process == null || !process.startsWith("com.heytap.health")) return;
-        if (!process.equals("com.heytap.health:transport")) return;
         app = context.getApplicationContext() == null ? context : context.getApplicationContext();
+        trace("MUSIC_HOOK process=" + process);
         Class<?> presenter;
         try {
             presenter = XposedHelpers.findClass(PRESENTER, loader);
@@ -55,6 +55,7 @@ public final class OHealthMusicHook {
         XposedBridge.hookAllMethods(presenter, "sendVolumeInfo", mirror);
         XposedBridge.hookAllMethods(presenter, "sendMusicCloseInfo", mirror);
         XposedBridge.hookAllMethods(presenter, "responseTotalInfo", mirror);
+        if (!"com.heytap.health:transport".equals(process)) return;
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context receiverContext, Intent intent) {
                 if (intent == null || !NativeMusic.ACTION.equals(intent.getAction())) return;
