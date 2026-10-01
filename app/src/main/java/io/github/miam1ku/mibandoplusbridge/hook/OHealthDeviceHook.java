@@ -51,7 +51,13 @@ public final class OHealthDeviceHook {
         if (hostContext == null) hostContext = context;
         if (!HOST.equals(context.getPackageName())) return;
         main = new Handler(Looper.getMainLooper());
-        Class<?> infoClass = XposedHelpers.findClass(INFO, loader);
+        Class<?> infoClass = HookResolver.resolveClassByMembers(hostContext, loader, INFO,
+                "com.heytap.health.devicemanager.", null,
+                new String[]{"getMac", "getDeviceUniqueId", "setMac", "setDeviceUniqueId",
+                        "setModel", "setDeviceType"}, new String[0]);
+        if (!INFO.equals(infoClass.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_DEVICE_INFO_ADAPTED " + infoClass.getName());
+        }
         Class<?> controllerClass = HookResolver.resolveClassBySignatures(hostContext, loader, CONTROLLER,
                 "com.heytap.health.device.tab.",
                 new Class<?>[] {List.class, List.class, String.class},
@@ -375,7 +381,9 @@ public final class OHealthDeviceHook {
 
 
     private static Object deviceInfo(ClassLoader loader, Bundle display) throws Exception {
-        Class<?> constants = XposedHelpers.findClass(CONSTANTS, loader);
+        Class<?> constants = HookResolver.resolveClassByMembers(hostContext, loader, CONSTANTS,
+                "com.heytap.health.device_manager_base.", null,
+                new String[0], new String[]{"BAND_DEVICE_MODEL", "Companion"});
         // Native pages only load for an OPPO band model. The Xiaomi MAC and device id stay real.
         String model = (String) XposedHelpers.getStaticObjectField(constants, "BAND_DEVICE_MODEL");
         int type = wearableType(constants, model);
@@ -383,14 +391,20 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_DEVICE_TYPE_MISSING");
             return null;
         }
-        Object info = XposedHelpers.newInstance(XposedHelpers.findClass(INFO, loader));
+        Class<?> infoType = HookResolver.resolveClassByMembers(hostContext, loader, INFO,
+                "com.heytap.health.devicemanager.", null,
+                new String[]{"getMac", "getDeviceUniqueId", "setMac", "setDeviceUniqueId",
+                        "setModel", "setDeviceType"}, new String[0]);
+        Object info = XposedHelpers.newInstance(infoType);
         XposedHelpers.callMethod(info, "setMac", display.getString("mac"));
         XposedHelpers.callMethod(info, "setDeviceUniqueId", display.getString("deviceId"));
         XposedHelpers.callMethod(info, "setModel", model);
         XposedHelpers.callMethod(info, "setDeviceType", type);
         XposedHelpers.callMethod(info, "setManufacturer", "OPPO");
-        String terminal = (String) XposedHelpers.callStaticMethod(
-                XposedHelpers.findClass("com.heytap.health.base.app.SystemUtils", loader), "getAndroidId");
+        Class<?> systemUtils = HookResolver.resolveClassByMembers(hostContext, loader,
+                "com.heytap.health.base.app.SystemUtils", "com.heytap.health.base.", null,
+                new String[]{"getAndroidId"}, new String[0]);
+        String terminal = (String) XposedHelpers.callStaticMethod(systemUtils, "getAndroidId");
         if (terminal != null && !terminal.isBlank()) XposedHelpers.callMethod(info, "setAppTerminalId", terminal);
         XposedHelpers.callMethod(info, "setBleMac", display.getString("mac"));
         updateInfo(info, display);
@@ -432,8 +446,12 @@ public final class OHealthDeviceHook {
                 }
             }
             Object info = deviceInfo(loader, shown);
-            if (info != null) XposedHelpers.callMethod(list, "add",
-                    XposedHelpers.newInstance(XposedHelpers.findClass(WEARABLE, loader), info));
+            if (info != null) {
+                Class<?> wearable = HookResolver.resolveClassByMembers(hostContext, loader, WEARABLE,
+                        "com.heytap.health.device.tab.", null,
+                        new String[]{"isWearableDevice", "getData"}, new String[0]);
+                XposedHelpers.callMethod(list, "add", XposedHelpers.newInstance(wearable, info));
+            }
             return info;
         } finally {
             XposedHelpers.callMethod(list, "writeUnLock");
@@ -1166,10 +1184,16 @@ public final class OHealthDeviceHook {
 
     private static void installHostNotifications(ClassLoader loader) {
         try {
-            Class<?> bean = XposedHelpers.findClass(
-                    "com.heytap.health.watch.notification.HealthNotificationBean", loader);
-            String center = "com.heytap.health.watch.notification.HealthNotificationRegisterCenter";
-            XposedHelpers.findAndHookMethod(center, loader, "onNotificationPosted", bean, new XC_MethodHook() {
+            Class<?> bean = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.watch.notification.HealthNotificationBean",
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"getKey", "getPackageName", "getOrigin"}, new String[0]);
+            Class<?> center = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.watch.notification.HealthNotificationRegisterCenter",
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"onNotificationPosted", "onNotificationRemoved"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(center,
+                    "onNotificationPosted", null, bean), new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     forwardHostNotification(param.args[0], false);
                 }
@@ -1177,30 +1201,45 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_HOOK process="
                     + android.app.Application.getProcessName());
             trace("OHEALTH_NOTIFICATION_HOOK process=" + android.app.Application.getProcessName());
-            XposedHelpers.findAndHookMethod(center, loader, "onNotificationRemoved", bean, new XC_MethodHook() {
+            XposedBridge.hookMethod(HookResolver.resolveMethod(center,
+                    "onNotificationRemoved", null, bean), new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     forwardHostNotification(param.args[0], true);
                 }
             });
-            String manager = "com.heytap.health.watch.notification.impl.transceiver.NotificationEventManager";
-            XposedHelpers.findAndHookMethod(manager, loader, "onNotificationPosted", bean, new XC_MethodHook() {
+            Class<?> manager = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.watch.notification.impl.transceiver.NotificationEventManager",
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"onNotificationPosted", "onNotificationRemoved"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(manager,
+                    "onNotificationPosted", null, bean), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (registeredBand()) param.setResult(null);
                 }
             });
-            XposedHelpers.findAndHookMethod(manager, loader, "onNotificationRemoved", bean, new XC_MethodHook() {
+            XposedBridge.hookMethod(HookResolver.resolveMethod(manager,
+                    "onNotificationRemoved", null, bean), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (registeredBand()) param.setResult(null);
                 }
             });
-            XposedHelpers.findAndHookMethod("com.heytap.health.base.app.ToastUtil", loader,
-                    "showShort", String.class, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (param.args[0] instanceof String text && deferredConnectToast(text)) {
-                                param.setResult(null);
-                            }
-                        }
-                    });
+            Class<?> toast = HookResolver.resolveClassByMembers(hostContext, loader,
+                    "com.heytap.health.base.app.ToastUtil", "com.heytap.health.base.", null,
+                    new String[]{"showShort"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(toast,
+                    "showShort", null, String.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args[0] instanceof String text && deferredConnectToast(text)) {
+                        param.setResult(null);
+                    }
+                }
+            });
+            if (!"com.heytap.health.watch.notification.HealthNotificationBean".equals(bean.getName())
+                    || !"com.heytap.health.watch.notification.HealthNotificationRegisterCenter".equals(center.getName())
+                    || !"com.heytap.health.watch.notification.impl.transceiver.NotificationEventManager".equals(manager.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_STACK_ADAPTED bean="
+                        + bean.getName() + " center=" + center.getName() + " manager=" + manager.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_HOOK_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
