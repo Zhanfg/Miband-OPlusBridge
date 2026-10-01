@@ -234,6 +234,7 @@ public final class EntryPoint extends XposedModule {
     private static void installHealth(Context context, ClassLoader loader) {
         if (context == null || !healthInstalled.compareAndSet(false, true)) return;
         OHealthHostProfile.Profile profile = OHealthHostProfile.detect(context);
+        HookResolver.resetDiagnostics();
         android.util.Log.i("OplusBandBridge", "OHEALTH_HOOKS_BEGIN " + profile.diagnostic());
         try {
             OHealthWeatherHook.install(context, loader);
@@ -294,6 +295,7 @@ public final class EntryPoint extends XposedModule {
         } catch (Throwable incompatible) {
             android.util.Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_ACCESS_HOOK_UNAVAILABLE");
         }
+        android.util.Log.i("OplusBandBridge", "OHEALTH_DEX_SUMMARY " + HookResolver.diagnosticSummary());
     }
 
     /**
