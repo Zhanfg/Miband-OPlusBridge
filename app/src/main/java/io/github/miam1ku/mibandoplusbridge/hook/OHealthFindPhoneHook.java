@@ -19,6 +19,8 @@ public final class OHealthFindPhoneHook {
     private static boolean findingWatch;
     private static Context appContext;
     private static BroadcastReceiver receiver;
+    private static Class<?> handlerClass;
+    private static Class<?> utilClass;
 
     private OHealthFindPhoneHook() {}
 
@@ -27,6 +29,16 @@ public final class OHealthFindPhoneHook {
         if (!"com.heytap.health".equals(android.app.Application.getProcessName())) return;
         Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
         appContext = app;
+        try {
+            handlerClass = HookResolver.resolveClassByMembers(app, loader, HANDLER,
+                    "com.heytap.health.watch.commonsync.", null,
+                    new String[]{"playRing"}, new String[0]);
+        } catch (Throwable ignored) { handlerClass = null; }
+        try {
+            utilClass = HookResolver.resolveClassByMembers(app, loader, UTIL,
+                    "com.heytap.health.watch.commonsync.", null,
+                    new String[]{"stopPlayRing", "setVolumeToOrigin"}, new String[]{"INSTANCE"});
+        } catch (Throwable ignored) { utilClass = null; }
         IntentFilter filter = new IntentFilter(FindPhone.ACTION);
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context receiverContext, Intent intent) {
@@ -37,7 +49,10 @@ public final class OHealthFindPhoneHook {
         };
         app.registerReceiver(receiver, filter, FindPhone.PERMISSION, null, Context.RECEIVER_EXPORTED);
         try {
-            XposedHelpers.findAndHookMethod(FIND_ROW, loader, "itemClick", new XC_MethodHook() {
+            Class<?> row = HookResolver.resolveClassByMembers(app, loader, FIND_ROW,
+                    "com.heytap.health.device.tab.itemview.wearable.", null,
+                    new String[]{"itemClick", "getCurrSelectWearableDevice"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(row, "itemClick", null), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (!ourBand(param.thisObject)) return;
                     param.setResult(null);
@@ -60,6 +75,9 @@ public final class OHealthFindPhoneHook {
                     }
                 }
             });
+            if (!FIND_ROW.equals(row.getName())) {
+                android.util.Log.i("OplusBandBridge", "FIND_WATCH_ROW_ADAPTED " + row.getName());
+            }
         } catch (Throwable failure) {
             android.util.Log.i("OplusBandBridge", "FIND_WATCH native unavailable");
         }
@@ -70,6 +88,8 @@ public final class OHealthFindPhoneHook {
         BroadcastReceiver current = receiver;
         receiver = null;
         appContext = null;
+        handlerClass = null;
+        utilClass = null;
         findingWatch = false;
         if (app != null && current != null) {
             try { app.unregisterReceiver(current); } catch (RuntimeException ignored) {}
@@ -78,7 +98,8 @@ public final class OHealthFindPhoneHook {
 
     private static void play(ClassLoader loader) {
         try {
-            Object handler = XposedHelpers.newInstance(XposedHelpers.findClass(HANDLER, loader));
+            Class<?> type = handlerClass != null ? handlerClass : XposedHelpers.findClass(HANDLER, loader);
+            Object handler = XposedHelpers.newInstance(type);
             XposedHelpers.callMethod(handler, "playRing");
         } catch (Throwable failure) {
             android.util.Log.i("OplusBandBridge", "FIND_PHONE native unavailable");
@@ -87,7 +108,7 @@ public final class OHealthFindPhoneHook {
 
     private static void stop(ClassLoader loader) {
         try {
-            Class<?> util = XposedHelpers.findClass(UTIL, loader);
+            Class<?> util = utilClass != null ? utilClass : XposedHelpers.findClass(UTIL, loader);
             Object instance = XposedHelpers.getStaticObjectField(util, "INSTANCE");
             XposedHelpers.callMethod(instance, "stopPlayRing");
             XposedHelpers.callMethod(instance, "setVolumeToOrigin");
