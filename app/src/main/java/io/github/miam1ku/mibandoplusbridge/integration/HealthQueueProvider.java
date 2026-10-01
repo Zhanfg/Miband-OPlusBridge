@@ -250,12 +250,14 @@ public final class HealthQueueProvider extends ContentProvider {
         long[] ends = extras.getLongArray("ends");
         int[] values = extras.getIntArray("values");
         int[] distances = extras.getIntArray("distances");
+        int[] calories = extras.getIntArray("calories");
         String[] timezones = extras.getStringArray("timezones");
         int size = sourceKeys == null ? -1 : sourceKeys.length;
         if (size <= 0 || size > 64 || kinds == null || starts == null || ends == null
-                || values == null || distances == null || timezones == null
+                || values == null || distances == null || calories == null || timezones == null
                 || kinds.length != size || starts.length != size || ends.length != size
-                || values.length != size || distances.length != size || timezones.length != size) {
+                || values.length != size || distances.length != size || calories.length != size
+                || timezones.length != size) {
             throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_INVALID");
         }
 
@@ -287,9 +289,13 @@ public final class HealthQueueProvider extends ContentProvider {
                 if (timezones[i] != null && !timezones[i].isBlank()) row.put("timezone", timezones[i]);
                 row.put("measurementMode", "continuous");
                 row.put("complete", false);
-                if ("steps_interval".equals(kind) && distances[i] >= 0) row.put("distance", distances[i]);
+                if ("steps_interval".equals(kind)) {
+                    if (distances[i] >= 0) row.put("distance", distances[i]);
+                    if (calories[i] >= 0) row.put("calories", calories[i]);
+                }
                 row.put("sourceFingerprint", sha256(kind + "|" + starts[i] + "|" + ends[i]
-                        + "|" + values[i] + "|" + distances[i] + "|" + timezones[i]));
+                        + "|" + values[i] + "|" + distances[i] + "|" + calories[i]
+                        + "|" + timezones[i]));
                 batch.add(Measurement.fromJson(row));
             } catch (org.json.JSONException invalid) {
                 throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID", invalid);
