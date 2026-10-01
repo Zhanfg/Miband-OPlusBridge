@@ -1170,7 +1170,6 @@ public final class BandLiveService extends Service {
                 .setContentTitle(title)
                 .setCategory(Notification.CATEGORY_SERVICE)
                 .setShowWhen(false)
-                .setSilent(true)
                 .setVisibility(Notification.VISIBILITY_SECRET)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
