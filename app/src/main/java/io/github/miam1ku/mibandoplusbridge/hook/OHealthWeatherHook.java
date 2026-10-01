@@ -22,10 +22,12 @@ import org.json.JSONObject;
 /** Calls OHealth's own weather source; forwards only validated forecast fields to the bridge. */
 public final class OHealthWeatherHook {
     private static final String HOST = "com.heytap.health";
+    private static Session installed;
 
     private OHealthWeatherHook() {}
 
-    public static void install(Context context, ClassLoader loader) throws Exception {
+    public static synchronized void install(Context context, ClassLoader loader) throws Exception {
+        if (installed != null) return;
         if (!HOST.equals(android.app.Application.getProcessName())) return;
         Class<?> cloud = Class.forName("com.heytap.weather.service.WeatherCloud2", false, loader);
         Class<?> consumerType = Class.forName("io.reactivex.rxjava3.functions.Consumer", false, loader);
@@ -115,7 +117,37 @@ public final class OHealthWeatherHook {
             }
         };
         context.getContentResolver().registerContentObserver(WeatherSnapshotProvider.URI, false, requested[0]);
+        installed = new Session(context, worker, handler, requested[0], active);
         handler.post(() -> requested[0].onChange(false));
+    }
+
+    public static synchronized void detach() {
+        Session session = installed;
+        installed = null;
+        if (session == null) return;
+        session.active.set(null);
+        try { session.context.getContentResolver().unregisterContentObserver(session.observer); }
+        catch (RuntimeException ignored) {}
+        session.handler.removeCallbacksAndMessages(null);
+        session.thread.quit();
+    }
+
+    private static final class Session {
+        final Context context;
+        final HandlerThread thread;
+        final Handler handler;
+        final ContentObserver observer;
+        final AtomicReference<String> active;
+
+        Session(Context context, HandlerThread thread, Handler handler,
+                ContentObserver observer, AtomicReference<String> active) {
+            Context application = context.getApplicationContext();
+            this.context = application == null ? context : application;
+            this.thread = thread;
+            this.handler = handler;
+            this.observer = observer;
+            this.active = active;
+        }
     }
 
     private static boolean usable(Location location) {
