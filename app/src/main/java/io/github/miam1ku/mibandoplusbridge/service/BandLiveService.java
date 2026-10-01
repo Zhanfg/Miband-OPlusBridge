@@ -176,12 +176,15 @@ public final class BandLiveService extends Service {
         }
     }
 
-    private static void launch(Context context, boolean waitForRoot) {
+    private static void launch(Context context, boolean ignoredLegacyWaitFlag) {
         try {
             context.startForegroundService(new Intent(context, BandLiveService.class));
         } catch (RuntimeException backgroundRejected) {
-            if (waitForRoot) HostKeepAlive.startBridge(context);
-            else HostKeepAlive.startBridgeAsync(context);
+            // No root fallback. A companion association grants the background FGS path
+            // when Android reports the band present/connected.
+            CompanionPresence.ensureObserving(context);
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
+                    "WAKE_BRIDGE deferred=" + backgroundRejected.getClass().getSimpleName());
         }
     }
 
@@ -888,9 +891,9 @@ public final class BandLiveService extends Service {
     }
 
     private void reviveHealth() {
-        HostKeepAlive.startHealthAsync(this, () -> main.post(() -> {
-            if (!stopRequested) bindHealthHost();
-        }));
+        // OHealth is a system-managed host on ColorOS. Do not shell-start or watchdog it.
+        // A later host callback, provider read, or ordinary bind retry will reconnect.
+        healthHostStatus("UNAVAILABLE");
     }
 
     private void healthHostStatus(String status) {
