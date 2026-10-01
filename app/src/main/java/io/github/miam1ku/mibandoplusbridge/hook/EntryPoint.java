@@ -235,7 +235,9 @@ public final class EntryPoint extends XposedModule {
         if (context == null || !healthInstalled.compareAndSet(false, true)) return;
         OHealthHostProfile.Profile profile = OHealthHostProfile.detect(context);
         HookResolver.resetDiagnostics();
+        String profileLine = "OHEALTH_PROFILE " + profile.diagnostic();
         android.util.Log.i("OplusBandBridge", "OHEALTH_HOOKS_BEGIN " + profile.diagnostic());
+        traceHealth(context, profileLine);
         try {
             OHealthWeatherHook.install(context, loader);
             android.util.Log.i("OplusBandBridge", "OHEALTH_WEATHER_HOOK_INSTALLED");
@@ -295,7 +297,22 @@ public final class EntryPoint extends XposedModule {
         } catch (Throwable incompatible) {
             android.util.Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_ACCESS_HOOK_UNAVAILABLE");
         }
-        android.util.Log.i("OplusBandBridge", "OHEALTH_DEX_SUMMARY " + HookResolver.diagnosticSummary());
+        String dexSummary = "OHEALTH_DEX_SUMMARY " + HookResolver.diagnosticSummary();
+        android.util.Log.i("OplusBandBridge", dexSummary);
+        traceHealth(context, dexSummary);
+    }
+
+    private static void traceHealth(Context context, String line) {
+        if (context == null || line == null || line.isBlank()) return;
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putString("line", line.length() > 240 ? line.substring(0, 240) : line);
+            context.getContentResolver().call(
+                    io.github.miam1ku.mibandoplusbridge.integration.HostNotifyProvider.URI,
+                    "trace", null, extras);
+        } catch (RuntimeException ignored) {
+            // Diagnostic delivery must never affect host hook installation.
+        }
     }
 
     /**
