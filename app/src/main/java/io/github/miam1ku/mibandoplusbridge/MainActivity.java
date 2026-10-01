@@ -351,6 +351,7 @@ public final class MainActivity extends AppCompatActivity {
             Intent launch = getPackageManager().getLaunchIntentForPackage(HostIdentity.MI_PACKAGE);
             if (launch == null) {
                 checkingLsp = false;
+                updateControls();
                 ownershipStatus.setText("未找到小米运动健康，无法验证 LSPosed 注入。");
                 return;
             }
