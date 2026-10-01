@@ -32,6 +32,9 @@ public final class OHealthDeviceHook {
     private static int snapshotAttempts;
     private static boolean snapshotTraced;
 
+    private static HandlerThread snapshotThread;
+    private static ContentObserver snapshotObserver;
+    private static Runnable snapshotRefresh;
     private static Handler worker;
     private static Handler main;
     private static final List<WeakReference<Object>> CONTROLLERS = new ArrayList<>();
@@ -40,7 +43,8 @@ public final class OHealthDeviceHook {
 
     private OHealthDeviceHook() {}
     private static Context hostContext;
-    public static void install(Context context, ClassLoader loader) throws Exception {
+    public static synchronized void install(Context context, ClassLoader loader) throws Exception {
+        if (hostContext != null) return;
         hostContext = context.getApplicationContext();
         // Application.attach runs before ActivityThread publishes the Application instance.
         if (hostContext == null) hostContext = context;
@@ -150,6 +154,7 @@ public final class OHealthDeviceHook {
     private static void observeSnapshots(ClassLoader loader) {
         HandlerThread thread = new HandlerThread("OplusBandDeviceSnapshot");
         thread.start();
+        snapshotThread = thread;
         worker = new Handler(thread.getLooper());
         Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
@@ -181,20 +186,49 @@ public final class OHealthDeviceHook {
                 worker.postDelayed(refresh[0], 2_000);
             } else snapshotAttempts = 0;
         };
+        snapshotRefresh = refresh[0];
         ContentObserver observer = new ContentObserver(worker) {
             @Override public void onChange(boolean selfChange) {
-                worker.removeCallbacks(refresh[0]);
-                worker.post(refresh[0]);
+                Handler current = worker;
+                if (current == null) return;
+                current.removeCallbacks(refresh[0]);
+                current.post(refresh[0]);
             }
         };
+        snapshotObserver = observer;
         worker.post(() -> {
             try {
-                hostContext.getContentResolver().registerContentObserver(DeviceCardProvider.URI, true, observer);
+                Context current = hostContext;
+                if (current == null) return;
+                current.getContentResolver().registerContentObserver(DeviceCardProvider.URI, true, observer);
             } catch (Throwable failure) {
                 Log.i("OplusBandBridge", "OHEALTH_OBSERVER_UNAVAILABLE " + failure.getClass().getSimpleName());
             }
             refresh[0].run();
         });
+    }
+
+    public static synchronized void detach() {
+        Context context = hostContext;
+        ContentObserver observer = snapshotObserver;
+        Handler handler = worker;
+        HandlerThread thread = snapshotThread;
+        hostContext = null;
+        snapshotObserver = null;
+        snapshotRefresh = null;
+        worker = null;
+        snapshotThread = null;
+        snapshot = null;
+        snapshotAttempts = 0;
+        snapshotTraced = false;
+        synchronized (CONTROLLERS) { CONTROLLERS.clear(); }
+        if (context != null && observer != null) {
+            try { context.getContentResolver().unregisterContentObserver(observer); }
+            catch (RuntimeException ignored) {}
+        }
+        if (handler != null) handler.removeCallbacksAndMessages(null);
+        if (thread != null) thread.quitSafely();
+        try { ALLOWLIST.shutdownNow(); } catch (RuntimeException ignored) {}
     }
 
     private static Bundle fromProvider() {
