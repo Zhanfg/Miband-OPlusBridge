@@ -16,6 +16,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class OwnershipController {
     private static final ReentrantReadWriteLock GATE = new ReentrantReadWriteLock(true);
+    private static final Object ACK_MONITOR = new Object();
+    private static final long ACK_TIMEOUT_MS = 1_500;
+    private static long acknowledgedGeneration = -1;
     private final Context context;
     private final LocalPrefs state;
 
@@ -36,7 +39,17 @@ public final class OwnershipController {
 
     public synchronized boolean nativeReady() {
         return "NATIVE".equals(mode()) && state.getBoolean("hookExclusive", false)
+                && !state.getBoolean("transitionPending", false)
                 && context.getSystemService(UserManager.class).isUserUnlocked();
+    }
+
+    /** Called only by the authenticated OwnershipProvider hookAck path. */
+    public static void noteHookAck(long generation) {
+        if (generation < 0) return;
+        synchronized (ACK_MONITOR) {
+            if (generation > acknowledgedGeneration) acknowledgedGeneration = generation;
+            ACK_MONITOR.notifyAll();
+        }
     }
 
     public synchronized void takeOver() throws Failure {
@@ -58,10 +71,15 @@ public final class OwnershipController {
                     .commit()) {
                 throw new Failure("OWNERSHIP_STORAGE_FAILED");
             }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                rollbackTakeover(generation);
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
             if (!state.edit().putBoolean("transitionPending", false).commit()) {
+                rollbackTakeover(generation);
                 throw new Failure("OWNERSHIP_STORAGE_FAILED");
             }
-            publish();
         } finally {
             GATE.writeLock().unlock();
         }
@@ -95,6 +113,36 @@ public final class OwnershipController {
         if (!"NATIVE".equals(mode()) || nativeReady()) return false;
         restoreOfficial();
         return true;
+    }
+
+    private static boolean awaitHookAck(long generation, long timeoutMs) {
+        long deadline = android.os.SystemClock.elapsedRealtime() + Math.max(1, timeoutMs);
+        synchronized (ACK_MONITOR) {
+            while (acknowledgedGeneration < generation) {
+                long remaining = deadline - android.os.SystemClock.elapsedRealtime();
+                if (remaining <= 0) return false;
+                try {
+                    ACK_MONITOR.wait(remaining);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private void rollbackTakeover(long failedGeneration) {
+        long rollbackGeneration = Math.max(state.getLong("generation", 0), failedGeneration) + 1;
+        state.edit()
+                .putString("mode", "OFFICIAL")
+                .putBoolean("hookExclusive", false)
+                .putBoolean("ownsDisable", false)
+                .putBoolean("transitionPending", false)
+                .putBoolean("officialRestored", true)
+                .putLong("generation", rollbackGeneration)
+                .commit();
+        publish();
     }
 
     private void publish() {
