@@ -32,17 +32,18 @@ android {
     }
     buildTypes {
         debug {
-            signingConfig keyPath != null ? signingConfigs.projectKey : null
+            // Keep AGP's ordinary debug signing when no project key is supplied.
+            if (keyPath != null) signingConfig signingConfigs.projectKey
         }
         release {
-            signingConfig keyPath != null ? signingConfigs.projectKey : null
+            if (keyPath != null) signingConfig signingConfigs.projectKey
             minifyEnabled false
         }
     }
 }
 
 tasks.configureEach {
-    if (name == 'packageDebug' || name == 'packageRelease') {
+    if (name == 'packageRelease') {
         doFirst {
             ['OPLUSBAND_KEYSTORE', 'OPLUSBAND_STORE_PASSWORD', 'OPLUSBAND_KEY_ALIAS',
              'OPLUSBAND_KEY_PASSWORD'].each {
