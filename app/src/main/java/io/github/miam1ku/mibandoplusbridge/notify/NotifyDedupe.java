@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package io.github.miam1ku.mibandoplusbridge.notify;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.Map;
 import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
@@ -9,7 +9,8 @@ import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
 /** Collapses the health hook and the local listener posting one notification twice. */
 public final class NotifyDedupe {
     public static final long WINDOW_MS = 2_000;
-    private final Map<String, Long> seen = new HashMap<>();
+    /** Insertion order lets expiration stop at the first live entry: amortized O(1). */
+    private final Map<String, Long> seen = new LinkedHashMap<>();
 
     public static String identity(XiaomiProto.Command command) {
         if (command == null || !command.hasNotification()) return "";
@@ -31,7 +32,9 @@ public final class NotifyDedupe {
         if (identity == null || identity.isBlank()) return true;
         Iterator<Map.Entry<String, Long>> entries = seen.entrySet().iterator();
         while (entries.hasNext()) {
-            if (now - entries.next().getValue() > WINDOW_MS) entries.remove();
+            Map.Entry<String, Long> entry = entries.next();
+            if (now - entry.getValue() <= WINDOW_MS) break;
+            entries.remove();
         }
         Long previous = seen.get(identity);
         if (previous != null && now - previous <= WINDOW_MS) return false;
