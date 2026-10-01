@@ -96,9 +96,18 @@ public final class HealthQueueProvider extends ContentProvider {
     }
 
     @Override public synchronized Bundle call(String method, String arg, Bundle extras) {
-        boolean self = requireCaller();
+        int uid = Binder.getCallingUid();
+        boolean self = uid == Process.myUid();
+        boolean healthCaller = !self && HostIdentity.uidHas(getContext(), uid, HOST);
+        boolean miCaller = !self && HostIdentity.uidHas(getContext(), uid, HostIdentity.MI_PACKAGE);
+        if (!self && !healthCaller && !miCaller) throw new SecurityException("HEALTH_CALLER_NOT_AUTHORIZED");
         requireUnlocked();
         if (method == null) throw new IllegalArgumentException("UNSUPPORTED_HEALTH_OPERATION");
+        if ("mirrorBatch".equals(method)) {
+            if (!miCaller) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
+            return mirrorBatch(extras);
+        }
+        if (miCaller) throw new SecurityException("MI_FITNESS_MIRROR_ONLY");
         switch (method) {
             case "adoptAccount": {
                 if (self || extras == null) throw new SecurityException("OHEALTH_CALLER_REQUIRED");
