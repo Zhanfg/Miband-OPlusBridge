@@ -17,20 +17,25 @@ public final class OHealthFindPhoneHook {
     private static final String FIND_ROW =
             "com.heytap.health.device.tab.itemview.wearable.MenuFindDeviceItem";
     private static boolean findingWatch;
+    private static Context appContext;
+    private static BroadcastReceiver receiver;
 
     private OHealthFindPhoneHook() {}
 
-    public static void install(Context context, ClassLoader loader) {
+    public static synchronized void install(Context context, ClassLoader loader) {
+        if (receiver != null) return;
         if (!"com.heytap.health".equals(android.app.Application.getProcessName())) return;
         Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
+        appContext = app;
         IntentFilter filter = new IntentFilter(FindPhone.ACTION);
-        app.registerReceiver(new BroadcastReceiver() {
+        receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context receiverContext, Intent intent) {
                 if (intent == null || !FindPhone.ACTION.equals(intent.getAction())) return;
                 if (intent.getBooleanExtra("start", false)) play(loader);
                 else stop(loader);
             }
-        }, filter, FindPhone.PERMISSION, null, Context.RECEIVER_EXPORTED);
+        };
+        app.registerReceiver(receiver, filter, FindPhone.PERMISSION, null, Context.RECEIVER_EXPORTED);
         try {
             XposedHelpers.findAndHookMethod(FIND_ROW, loader, "itemClick", new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
@@ -57,6 +62,17 @@ public final class OHealthFindPhoneHook {
             });
         } catch (Throwable failure) {
             android.util.Log.i("OplusBandBridge", "FIND_WATCH native unavailable");
+        }
+    }
+
+    public static synchronized void detach() {
+        Context app = appContext;
+        BroadcastReceiver current = receiver;
+        receiver = null;
+        appContext = null;
+        findingWatch = false;
+        if (app != null && current != null) {
+            try { app.unregisterReceiver(current); } catch (RuntimeException ignored) {}
         }
     }
 
