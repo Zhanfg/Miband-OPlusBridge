@@ -46,6 +46,13 @@ public final class MiHealthMirrorHook {
                 new String[]{"recordDailyRecordToDB", "recordServerDailyDataToDB"}, new String[0]);
         Method local = HookResolver.resolveMethod(utils, "recordDailyRecordToDB", boolean.class,
                 String.class, String.class, List.class, boolean.class);
+        Class<?> homeType = Class.forName(
+                "com.xiaomi.fit.fitness.export.data.annotation.HomeDataType", false, loader);
+        Method getAll = utils.getMethod("getAllDailyRecord",
+                homeType, String.class, long.class, long.class, int.class);
+        Object utilsInstance = XposedHelpers.getStaticObjectField(utils, "INSTANCE");
+        backfill = new Backfill(utilsInstance, getAll, homeType);
+
         XposedBridge.hookMethod(local, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (param.hasThrowable() || !Boolean.TRUE.equals(param.getResult())) return;
@@ -60,6 +67,8 @@ public final class MiHealthMirrorHook {
     public static synchronized void detach() {
         ThreadPoolExecutor current = writer;
         writer = null;
+        backfill = null;
+        lastBackfillGeneration = -1;
         if (current != null) current.shutdownNow();
     }
 
