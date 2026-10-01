@@ -38,7 +38,7 @@ public final class SetupProgress {
             case IMPORT -> "导入绑定";
             case PROFILE -> "采集连接参数";
             case ADD -> "添加到健康";
-            case DONE -> "立即同步";
+            case DONE -> "同步到 OHealth";
         };
     }
 
