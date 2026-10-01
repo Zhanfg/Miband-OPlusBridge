@@ -7,11 +7,8 @@ import android.util.Log;
 import android.util.Pair;
 import androidx.annotation.NonNull;
 import io.github.libxposed.api.XposedModule;
-import io.github.libxposed.api.utils.DexParser;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
-import java.io.IOException;
 import java.lang.reflect.Executable;
-import java.nio.ByteBuffer;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -100,16 +97,6 @@ public final class EntryPoint extends XposedModule {
             module.hookedIds.add(id);
         }
         builder.intercept(chain -> XposedBridge.dispatch(executable, callback, chain));
-    }
-
-    /** Opens the framework-provided API 102 dex parser; null outside a loaded Xposed process. */
-    static DexParser openDexParser(byte[] dex, boolean includeAnnotations) throws IOException {
-        EntryPoint module = current;
-        if (module == null || dex == null || dex.length == 0) return null;
-        ByteBuffer direct = ByteBuffer.allocateDirect(dex.length);
-        direct.put(dex);
-        direct.flip();
-        return module.parseDex(direct, includeAnnotations);
     }
 
     static void logModern(int priority, String text, Throwable error) {
