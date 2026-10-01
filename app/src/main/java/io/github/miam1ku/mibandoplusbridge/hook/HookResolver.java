@@ -2,6 +2,7 @@
 package io.github.miam1ku.mibandoplusbridge.hook;
 
 import android.content.Context;
+import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -16,6 +17,12 @@ import java.util.List;
  * against the current host ClassLoader and always fails closed on ambiguity.
  */
 final class HookResolver {
+    private static final int CACHE_LIMIT = 16;
+    private static final LinkedHashMap<String, List<String>> CLASS_CACHE =
+            new LinkedHashMap<>(16, 0.75f, true);
+    private static final LinkedHashMap<String, List<DexAnchors.MethodRef>> ANCHOR_CACHE =
+            new LinkedHashMap<>(16, 0.75f, true);
+
     private HookResolver() {}
 
     static Class<?> resolveClass(Context context, ClassLoader loader, String stableName,
@@ -32,7 +39,7 @@ final class HookResolver {
             Class<?> found = null;
             for (String apk : apkPaths(context)) {
                 try {
-                    for (String name : DexAnchors.classNames(apk)) {
+                    for (String name : cachedClassNames(apk)) {
                         if (packagePrefix != null && !name.startsWith(packagePrefix)) continue;
                         if (name.indexOf(36) >= 0) continue;
                         Class<?> candidate;
@@ -101,7 +108,7 @@ final class HookResolver {
                 if (literal == null || literal.isBlank()) continue;
                 HashSet<String> counted = new HashSet<>();
                 for (String apk : apkPaths(context)) {
-                    for (DexAnchors.MethodRef ref : DexAnchors.methodsReferencing(apk, literal)) {
+                    for (DexAnchors.MethodRef ref : cachedMethods(apk, literal)) {
                         Class<?> owner;
                         try {
                             owner = Class.forName(binaryName(ref.classDescriptor()), false, loader);
@@ -148,6 +155,44 @@ final class HookResolver {
         final Method method;
         int score;
         Candidate(Method method) { this.method = method; }
+    }
+
+    private static List<String> cachedClassNames(String apk) throws IOException {
+        String key = fingerprint(apk);
+        synchronized (CLASS_CACHE) {
+            List<String> cached = CLASS_CACHE.get(key);
+            if (cached != null) return cached;
+        }
+        List<String> parsed = List.copyOf(DexAnchors.classNames(apk));
+        cachePut(CLASS_CACHE, key, parsed);
+        return parsed;
+    }
+
+    private static List<DexAnchors.MethodRef> cachedMethods(String apk, String literal)
+            throws IOException {
+        String key = fingerprint(apk) + "\n" + literal;
+        synchronized (ANCHOR_CACHE) {
+            List<DexAnchors.MethodRef> cached = ANCHOR_CACHE.get(key);
+            if (cached != null) return cached;
+        }
+        List<DexAnchors.MethodRef> parsed = List.copyOf(DexAnchors.methodsReferencing(apk, literal));
+        cachePut(ANCHOR_CACHE, key, parsed);
+        return parsed;
+    }
+
+    private static String fingerprint(String apk) {
+        File file = new File(apk);
+        return apk + "\n" + file.length() + "\n" + file.lastModified();
+    }
+
+    private static <T> void cachePut(LinkedHashMap<String, T> cache, String key, T value) {
+        synchronized (cache) {
+            cache.put(key, value);
+            while (cache.size() > CACHE_LIMIT) {
+                String eldest = cache.keySet().iterator().next();
+                cache.remove(eldest);
+            }
+        }
     }
 
     private static boolean declaresSignatures(Class<?> type, Class<?>[][] signatures) {
