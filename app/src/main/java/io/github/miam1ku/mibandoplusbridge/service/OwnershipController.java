@@ -43,12 +43,56 @@ public final class OwnershipController {
                 && context.getSystemService(UserManager.class).isUserUnlocked();
     }
 
+    /** Normal operating mode: Mi Fitness keeps the authenticated transport. */
+    public synchronized boolean coexistReady() {
+        return "COEXIST".equals(mode()) && !state.getBoolean("hookExclusive", false)
+                && !state.getBoolean("transitionPending", false)
+                && context.getSystemService(UserManager.class).isUserUnlocked();
+    }
+
+    public synchronized boolean managedReady() {
+        return coexistReady() || nativeReady();
+    }
+
     /** Called only by the authenticated OwnershipProvider hookAck path. */
     public static void noteHookAck(long generation) {
         if (generation < 0) return;
         synchronized (ACK_MONITOR) {
             if (generation > acknowledgedGeneration) acknowledgedGeneration = generation;
             ACK_MONITOR.notifyAll();
+        }
+    }
+
+    public synchronized void enableCoexist() throws Failure {
+        GATE.writeLock().lock();
+        try {
+            requireUnlocked();
+            if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
+                throw new Failure("HOST_VERSION_UNSUPPORTED");
+            }
+            if (coexistReady()) return;
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit()
+                    .putBoolean("transitionPending", true)
+                    .putString("mode", "COEXIST")
+                    .putBoolean("hookExclusive", false)
+                    .putBoolean("ownsDisable", false)
+                    .putBoolean("officialRestored", false)
+                    .putLong("generation", generation)
+                    .commit()) {
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                rollbackToOfficial(generation);
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
+            if (!state.edit().putBoolean("transitionPending", false).commit()) {
+                rollbackToOfficial(generation);
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+        } finally {
+            GATE.writeLock().unlock();
         }
     }
 
@@ -136,6 +180,10 @@ public final class OwnershipController {
     }
 
     private void rollbackTakeover(long failedGeneration) {
+        rollbackToOfficial(failedGeneration);
+    }
+
+    private void rollbackToOfficial(long failedGeneration) {
         long rollbackGeneration = Math.max(state.getLong("generation", 0), failedGeneration) + 1;
         state.edit()
                 .putString("mode", "OFFICIAL")
