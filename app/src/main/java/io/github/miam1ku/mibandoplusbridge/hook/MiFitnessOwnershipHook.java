@@ -28,6 +28,7 @@ public final class MiFitnessOwnershipHook {
             Collections.newSetFromMap(new WeakHashMap<>());
     private static volatile Context hostContext;
     private static volatile ContentObserver observer;
+    private static volatile State cachedState = State.EMPTY;
 
     private MiFitnessOwnershipHook() {}
 
@@ -82,14 +83,17 @@ public final class MiFitnessOwnershipHook {
 
         observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
             @Override public void onChange(boolean selfChange) {
-                // This also acts as a liveness handshake from the bridge UI.
+                State state = refreshState();
                 signalOnline();
-                if (nativeOwnership()) releaseOfficialLinks();
+                if (state.nativeOwned) releaseOfficialLinks();
+                acknowledge(state.generation);
             }
         };
         hostContext.getContentResolver().registerContentObserver(OwnershipProvider.URI, false, observer);
+        State initial = refreshState();
         signalOnline();
-        if (nativeOwnership()) releaseOfficialLinks();
+        if (initial.nativeOwned) releaseOfficialLinks();
+        acknowledge(initial.generation);
     }
 
     public static synchronized void detach() {
@@ -97,6 +101,7 @@ public final class MiFitnessOwnershipHook {
         ContentObserver current = observer;
         observer = null;
         hostContext = null;
+        cachedState = State.EMPTY;
         if (context != null && current != null) {
             try { context.getContentResolver().unregisterContentObserver(current); }
             catch (RuntimeException ignored) {}
@@ -120,25 +125,26 @@ public final class MiFitnessOwnershipHook {
     }
 
     private static boolean target(String address) {
-        State state = state();
-        return state != null && !state.mac.isBlank() && address != null
-                && state.mac.equalsIgnoreCase(address);
+        State state = cachedState;
+        return !state.mac.isBlank() && address != null && state.mac.equalsIgnoreCase(address);
     }
 
     private static boolean nativeOwnership() {
-        State state = state();
-        return state != null && state.nativeOwned;
+        return cachedState.nativeOwned;
     }
 
-    private static State state() {
+    private static State refreshState() {
         Context context = hostContext;
-        if (context == null) return null;
+        if (context == null) return State.EMPTY;
         try {
             Bundle reply = context.getContentResolver().call(OwnershipProvider.URI, "state", null, null);
-            if (reply == null) return null;
-            return new State(reply.getBoolean("native", false), reply.getString("mac", ""));
+            if (reply == null) return cachedState;
+            State state = new State(reply.getBoolean("native", false),
+                    reply.getString("mac", ""), reply.getLong("generation", 0));
+            cachedState = state;
+            return state;
         } catch (RuntimeException unavailable) {
-            return null;
+            return cachedState;
         }
     }
 
@@ -150,6 +156,16 @@ public final class MiFitnessOwnershipHook {
             extras.putInt("api", 102);
             extras.putLong("versionCode", io.github.miam1ku.mibandoplusbridge.BuildConfig.VERSION_CODE);
             context.getContentResolver().call(OwnershipProvider.URI, "hookOnline", null, extras);
+        } catch (RuntimeException ignored) {}
+    }
+
+    private static void acknowledge(long generation) {
+        Context context = hostContext;
+        if (context == null || generation < 0) return;
+        try {
+            Bundle extras = new Bundle();
+            extras.putLong("generation", generation);
+            context.getContentResolver().call(OwnershipProvider.URI, "hookAck", null, extras);
         } catch (RuntimeException ignored) {}
     }
 
@@ -172,5 +188,7 @@ public final class MiFitnessOwnershipHook {
         try { gatt.close(); } catch (RuntimeException ignored) {}
     }
 
-    private record State(boolean nativeOwned, String mac) {}
+    private record State(boolean nativeOwned, String mac, long generation) {
+        static final State EMPTY = new State(false, "", 0);
+    }
 }
