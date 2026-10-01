@@ -61,12 +61,41 @@ public final class MiHealthMirrorHook {
         Object utilsInstance = XposedHelpers.getStaticObjectField(utils, "INSTANCE");
         backfill = new Backfill(utilsInstance, getAll, homeType);
 
+        Class<?> contactClass = Class.forName(
+                "com.xiaomi.fitness.device.contact.export.DeviceContact", false, loader);
+        Object contactCompanion = XposedHelpers.getStaticObjectField(contactClass, "Companion");
+        Class<?> contactExt = Class.forName(
+                "com.xiaomi.fitness.device.contact.export.DeviceSyncExtKt", false, loader);
+        Object contact = XposedHelpers.callStaticMethod(contactExt, "getInstance", contactCompanion);
+
+        Class<?> managerClass = Class.forName(
+                "com.xiaomi.fitness.device.manager.export.WearableDeviceManager", false, loader);
+        Object managerCompanion = XposedHelpers.getStaticObjectField(managerClass, "Companion");
+        Class<?> managerExt = Class.forName(
+                "com.xiaomi.fitness.device.manager.export.DeviceManagerExtKt", false, loader);
+        Object manager = XposedHelpers.callStaticMethod(managerExt, "getInstance", managerCompanion);
+        DeviceGate gate = new DeviceGate(context, manager, contact);
+        deviceGate = gate;
+
+        XC_MethodHook syncGate = new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam param) {
+                if (param.args.length == 0 || !(param.args[0] instanceof String did)) return;
+                if (gate.isTargetDid(did)) gate.markTargetSync(did);
+            }
+        };
+        XposedBridge.hookMethod(contactClass.getMethod("syncData", String.class, boolean.class), syncGate);
+        try {
+            XposedBridge.hookMethod(contactClass.getMethod("syncDataByWidget",
+                    String.class, boolean.class), syncGate);
+        } catch (NoSuchMethodException ignored) { }
+
         XposedBridge.hookMethod(local, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (param.hasThrowable() || !Boolean.TRUE.equals(param.getResult())) return;
                 if (!(param.args[2] instanceof List<?> models) || models.isEmpty()) return;
-                mirror(context, param.args[0] instanceof String key ? key : "",
-                        param.args[1] instanceof String sid ? sid : "", models);
+                String sid = param.args[1] instanceof String value ? value : "";
+                if (!gate.acceptSid(sid)) return;
+                mirror(context, param.args[0] instanceof String key ? key : "", sid, models);
             }
         });
         Log.i(TAG, "MI_HEALTH_MIRROR_READY " + utils.getName());
