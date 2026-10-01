@@ -27,6 +27,10 @@ public final class DeviceCardProvider extends ContentProvider {
     private static final String HOST = "com.heytap.mydevices";
     private static final String HEALTH = "com.heytap.health";
     private static final String[] COLUMNS = {"device_id", "device_mac", "device_data", "authority"};
+    private static volatile long healthProjectionSeen;
+    private static volatile long devicesProjectionSeen;
+    private static volatile String healthProjectionStage = "";
+    private static volatile String devicesProjectionStage = "";
 
     @Override public boolean onCreate() { return true; }
 
@@ -45,6 +49,14 @@ public final class DeviceCardProvider extends ContentProvider {
         int uid = Binder.getCallingUid();
         if (uid == Process.myUid()) return;
         if (!uidHas(HEALTH)) throw new SecurityException("DEVICE_SYNC_CALLER_NOT_AUTHORIZED");
+    }
+
+    private static boolean recent(long now, long then) {
+        return then > 0 && now >= then && now - then < 10 * 60_000L;
+    }
+
+    private static long age(long now, long then) {
+        return then <= 0 || now < then ? -1 : now - then;
     }
 
     private boolean uidHas(String packageName) {
@@ -187,6 +199,42 @@ public final class DeviceCardProvider extends ContentProvider {
     }
 
     @Override public Bundle call(String method, String arg, Bundle extras) {
+        if ("projectionOnline".equals(method)) {
+            requireReader();
+            String stage = extras == null ? "" : extras.getString("stage", "");
+            if (stage.length() > 96) stage = stage.substring(0, 96);
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (uidHas(HEALTH)) {
+                healthProjectionSeen = now;
+                healthProjectionStage = stage;
+            }
+            if (uidHas(HOST)) {
+                devicesProjectionSeen = now;
+                devicesProjectionStage = stage;
+            }
+            Bundle result = new Bundle();
+            result.putString("status", "PROJECTION_ONLINE_RECORDED");
+            return result;
+        }
+        if ("projectionStatus".equals(method)) {
+            if (!HostIdentity.isSelf()) throw new SecurityException("OWNER_ONLY");
+            long now = android.os.SystemClock.elapsedRealtime();
+            Bundle result = new Bundle();
+            result.putBoolean("healthOnline", recent(now, healthProjectionSeen));
+            result.putBoolean("devicesOnline", recent(now, devicesProjectionSeen));
+            result.putString("healthStage", healthProjectionStage);
+            result.putString("devicesStage", devicesProjectionStage);
+            result.putLong("healthAgeMs", age(now, healthProjectionSeen));
+            result.putLong("devicesAgeMs", age(now, devicesProjectionSeen));
+            return result;
+        }
+        if ("projectionRefresh".equals(method)) {
+            if (!HostIdentity.isSelf()) throw new SecurityException("OWNER_ONLY");
+            getContext().getContentResolver().notifyChange(URI, null);
+            Bundle result = new Bundle();
+            result.putString("status", "PROJECTION_REFRESHED");
+            return result;
+        }
         if ("requestSync".equals(method)) {
             requireSyncCaller();
             long identity = Binder.clearCallingIdentity();
