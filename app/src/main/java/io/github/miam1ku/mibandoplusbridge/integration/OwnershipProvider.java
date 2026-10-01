@@ -45,9 +45,12 @@ public final class OwnershipProvider extends ContentProvider {
         }
         LocalPrefs state = LocalPrefs.open(getContext(), "ownership");
         Bundle result = new Bundle();
-        result.putString("mode", state.getString("mode", "OFFICIAL"));
-        result.putBoolean("native", "NATIVE".equals(state.getString("mode", "OFFICIAL"))
+        String mode = state.getString("mode", "OFFICIAL");
+        result.putString("mode", mode);
+        result.putBoolean("native", "NATIVE".equals(mode)
                 && state.getBoolean("hookExclusive", false));
+        result.putBoolean("coexist", "COEXIST".equals(mode)
+                && !state.getBoolean("hookExclusive", false));
         result.putLong("generation", state.getLong("generation", 0));
         result.putString("mac", LocalPrefs.open(getContext(), "band-state").getString("mac", ""));
         var hook = getContext().getSharedPreferences("ownership-hook", 0);
