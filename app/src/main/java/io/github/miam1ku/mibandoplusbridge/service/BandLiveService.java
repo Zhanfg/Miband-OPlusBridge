@@ -35,6 +35,9 @@ public final class BandLiveService extends Service {
     private volatile io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue commands;
     private LiveHistorySync historySync;
     private volatile boolean syncRequested;
+    /** One-shot runtime wakes. No fixed-rate maintenance thread while the session is idle. */
+    private volatile java.util.concurrent.ScheduledFuture<?> maintenanceWake;
+    private volatile java.util.concurrent.ScheduledFuture<?> heldExpiryWake;
     private long nextBatteryAt;
     private long nextHealthAt;
     private long nextWeatherAt;
@@ -221,7 +224,7 @@ public final class BandLiveService extends Service {
                 live.stopLock.notifyAll();
             }
             try {
-                live.coordinator.execute(live::tick);
+                live.scheduleMaintenance(0);
                 return "ACCEPTED";
             } catch (java.util.concurrent.RejectedExecutionException stopping) {
                 return "OPEN_CONFIG_REQUIRED";
@@ -246,6 +249,7 @@ public final class BandLiveService extends Service {
             live.nextSleepFileAt = System.nanoTime();
             live.requestSleepState();
         }
+        live.scheduleMaintenance(0);
     }
 
     public static java.util.concurrent.CompletionStage<Void> requestWeather(Context context,
@@ -459,7 +463,11 @@ public final class BandLiveService extends Service {
     private static java.util.concurrent.CompletionStage<Void> holdNotification(Context context,
             nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context, "NOTIFY_HOLD");
-        return HELD_NOTIFICATIONS.add(command, android.os.SystemClock.elapsedRealtime());
+        var future = HELD_NOTIFICATIONS.add(command, android.os.SystemClock.elapsedRealtime());
+        BandLiveService live = instance;
+        if (live != null && !live.stopRequested) live.scheduleHeldExpiry();
+        else HostKeepAlive.ensureBridge(context);
+        return future;
     }
 
     private void expireHeld() {
@@ -468,12 +476,35 @@ public final class BandLiveService extends Service {
                 "NOTIFY_DROP reason=expired count=" + expired);
     }
 
+    /** Arm exactly one wake for the oldest held notification instead of polling every five seconds. */
+    private void scheduleHeldExpiry() {
+        try { coordinator.execute(this::armHeldExpiry); }
+        catch (java.util.concurrent.RejectedExecutionException stopping) { }
+    }
+
+    private void armHeldExpiry() {
+        java.util.concurrent.ScheduledFuture<?> previous = heldExpiryWake;
+        if (previous != null) previous.cancel(false);
+        heldExpiryWake = null;
+        if (stopRequested) return;
+        long delayMs = HELD_NOTIFICATIONS.nextExpiryDelay(android.os.SystemClock.elapsedRealtime());
+        if (delayMs < 0) return;
+        try {
+            heldExpiryWake = coordinator.schedule(() -> {
+                heldExpiryWake = null;
+                expireHeld();
+                armHeldExpiry();
+            }, delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException stopping) { }
+    }
+
     private void replayHeld() {
         long now = android.os.SystemClock.elapsedRealtime();
         int expired = HELD_NOTIFICATIONS.expire(now);
         if (expired > 0) io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                 "NOTIFY_DROP reason=expired count=" + expired);
         for (var held : HELD_NOTIFICATIONS.poll(now)) deliverHeld(held);
+        scheduleHeldExpiry();
     }
 
     private void deliverHeld(io.github.miam1ku.mibandoplusbridge.notify.NotifyReplay.Held held) {
@@ -572,6 +603,7 @@ public final class BandLiveService extends Service {
         calls = new io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor(this, coordinator);
         io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(this);
         instance = this;
+        scheduleHeldExpiry();
         sleepPauseOn = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.enabled(this);
         long armed = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.armedAt(this);
         if (sleepPauseOn && armed == Long.MAX_VALUE) {
@@ -579,8 +611,6 @@ public final class BandLiveService extends Service {
             io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.rememberCutoff(this, armed);
         }
         sleepArmedAtMs = sleepPauseOn ? armed : Long.MAX_VALUE;
-        coordinator.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.MINUTES);
-        coordinator.scheduleAtFixedRate(this::expireHeld, 5, 5, TimeUnit.SECONDS);
         try {
             registerReceiver(bluetoothEvents,
                     new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), RECEIVER_EXPORTED);
@@ -627,6 +657,12 @@ public final class BandLiveService extends Service {
         int dropped = HELD_NOTIFICATIONS.failAll(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
         if (dropped > 0) io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                 "NOTIFY_DROP reason=stopped count=" + dropped);
+        java.util.concurrent.ScheduledFuture<?> maintenance = maintenanceWake;
+        if (maintenance != null) maintenance.cancel(false);
+        maintenanceWake = null;
+        java.util.concurrent.ScheduledFuture<?> expiry = heldExpiryWake;
+        if (expiry != null) expiry.cancel(false);
+        heldExpiryWake = null;
         SppDiagnosticClient active = client;
         if (active != null) active.close();
     }
@@ -718,6 +754,7 @@ public final class BandLiveService extends Service {
                         historySync.request(true);
                         syncDnd();
                         requestSleepState();
+                        scheduleNextMaintenance(System.nanoTime());
                     }), fileId -> coordinator.execute(() -> {
                         if (client == active && !stopRequested && historySync != null) historySync.saved(fileId);
                     }), command -> {
@@ -873,6 +910,7 @@ public final class BandLiveService extends Service {
     }
 
     private void tick() {
+        maintenanceWake = null;
         var queue = commands;
         if (stopRequested || queue == null || historySync == null) return;
         if (!healthBound) bindHealthHost();
@@ -909,6 +947,25 @@ public final class BandLiveService extends Service {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
             weatherSync.sendIfChanged();
         }
+        scheduleNextMaintenance(System.nanoTime());
+    }
+
+    /** Schedule only the earliest real deadline. Idle sessions do not wake once a minute. */
+    private void scheduleNextMaintenance(long nowNanos) {
+        if (stopRequested || commands == null || historySync == null) return;
+        long next = syncRequested ? nowNanos
+                : Math.min(nextBatteryAt, Math.min(nextHealthAt, nextWeatherAt));
+        if (sleepPauseOn) next = Math.min(next, nextSleepFileAt);
+        scheduleMaintenance(Math.max(0, next - nowNanos));
+    }
+
+    private void scheduleMaintenance(long delayNanos) {
+        if (stopRequested) return;
+        try {
+            java.util.concurrent.ScheduledFuture<?> previous = maintenanceWake;
+            if (previous != null) previous.cancel(false);
+            maintenanceWake = coordinator.schedule(this::tick, Math.max(0, delayNanos), TimeUnit.NANOSECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException stopping) { }
     }
 
     private static boolean retryable(String code) {
@@ -1102,12 +1159,19 @@ public final class BandLiveService extends Service {
 
     private void show(String title) {
         NotificationManager manager = getSystemService(NotificationManager.class);
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "手环连接", NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "手环连接", NotificationManager.IMPORTANCE_MIN);
         channel.setShowBadge(false);
+        channel.setSound(null, null);
+        channel.enableVibration(false);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
         manager.createNotificationChannel(channel);
         Notification notice = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle(title)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setShowWhen(false)
+                .setSilent(true)
+                .setVisibility(Notification.VISIBILITY_SECRET)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
                 .build();
