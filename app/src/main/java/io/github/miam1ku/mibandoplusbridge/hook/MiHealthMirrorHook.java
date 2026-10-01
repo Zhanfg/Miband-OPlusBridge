@@ -115,16 +115,23 @@ public final class MiHealthMirrorHook {
         if (startMs <= 0 || startMs > Long.MAX_VALUE - 60_000L) return null;
 
         int distance = -1;
+        int calories = -1;
         if ("steps_interval".equals(kind)) {
             Object rawDistance = safeCall(item, "getDistance");
             if (rawDistance instanceof Number measured && measured.intValue() >= 0) {
                 distance = measured.intValue();
             }
+            Object rawCalories = safeCall(item, "getCalories");
+            if (rawCalories instanceof Number measured && Float.isFinite(measured.floatValue())
+                    && measured.floatValue() >= 0f) {
+                calories = Math.round(measured.floatValue());
+            }
         }
         Object zone = safeCall(model, "getZoneName");
         String timezone = zone instanceof String text ? text : "";
         String sourceKey = persistKey + "|" + sid + "|" + timestamp + "|" + item.getClass().getName();
-        return new Row(sourceKey, kind, startMs, startMs + 60_000L, value, distance, timezone);
+        return new Row(sourceKey, kind, startMs, startMs + 60_000L,
+                value, distance, calories, timezone);
     }
 
     private static Bundle bundle(List<Row> rows) {
@@ -135,6 +142,7 @@ public final class MiHealthMirrorHook {
         long[] ends = new long[size];
         int[] values = new int[size];
         int[] distances = new int[size];
+        int[] calories = new int[size];
         String[] timezones = new String[size];
         for (int i = 0; i < size; i++) {
             Row row = rows.get(i);
@@ -144,6 +152,7 @@ public final class MiHealthMirrorHook {
             ends[i] = row.endMs;
             values[i] = row.value;
             distances[i] = row.distance;
+            calories[i] = row.calories;
             timezones[i] = row.timezone;
         }
         Bundle payload = new Bundle();
@@ -153,6 +162,7 @@ public final class MiHealthMirrorHook {
         payload.putLongArray("ends", ends);
         payload.putIntArray("values", values);
         payload.putIntArray("distances", distances);
+        payload.putIntArray("calories", calories);
         payload.putStringArray("timezones", timezones);
         return payload;
     }
@@ -189,5 +199,5 @@ public final class MiHealthMirrorHook {
     }
 
     private record Row(String sourceKey, String kind, long startMs, long endMs,
-                       int value, int distance, String timezone) {}
+                       int value, int distance, int calories, String timezone) {}
 }
