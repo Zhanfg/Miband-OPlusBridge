@@ -29,11 +29,21 @@ public final class OHealthWeatherHook {
     public static synchronized void install(Context context, ClassLoader loader) throws Exception {
         if (installed != null) return;
         if (!HOST.equals(android.app.Application.getProcessName())) return;
-        Class<?> cloud = Class.forName("com.heytap.weather.service.WeatherCloud2", false, loader);
         Class<?> consumerType = Class.forName("io.reactivex.rxjava3.functions.Consumer", false, loader);
-        cloud.getDeclaredMethod("getWeatherDetailByCoordinate", String.class, String.class,
-                String.class, consumerType, consumerType);
+        Class<?>[] weatherSignature = {
+                String.class, String.class, String.class, consumerType, consumerType
+        };
+        Class<?> cloud = HookResolver.resolveClassBySignatures(context, loader,
+                "com.heytap.weather.service.WeatherCloud2", "com.heytap.weather.",
+                weatherSignature);
+        java.lang.reflect.Method weatherMethod = HookResolver.resolveMethod(cloud,
+                "getWeatherDetailByCoordinate", null, weatherSignature);
         Object source = cloud.getField("INSTANCE").get(null);
+        if (!"com.heytap.weather.service.WeatherCloud2".equals(cloud.getName())
+                || !"getWeatherDetailByCoordinate".equals(weatherMethod.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_WEATHER_ADAPTED "
+                    + cloud.getName() + "#" + weatherMethod.getName());
+        }
         LocationManager location = context.getSystemService(LocationManager.class);
         HandlerThread worker = new HandlerThread("OplusBandWeatherSource");
         worker.start();
@@ -97,7 +107,7 @@ public final class OHealthWeatherHook {
                                     }));
                                     Object error = consumer(loader, consumerType, ignored -> handler.post(() ->
                                             fail(context, active, requestId, "OHEALTH_WEATHER_CLOUD_UNAVAILABLE")));
-                                    XposedHelpers.callMethod(source, "getWeatherDetailByCoordinate",
+                                    weatherMethod.invoke(source,
                                             Double.toString(fix.getLongitude()), Double.toString(fix.getLatitude()),
                                             "c", success, error);
                                 } catch (Throwable unavailable) {
