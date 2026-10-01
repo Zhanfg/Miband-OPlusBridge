@@ -186,7 +186,9 @@ public final class OHealthHealthImportHook {
             Object manager = accounts.getMethod("getAccountManager").invoke(null);
             boolean system = manager != null && Boolean.TRUE.equals(
                     manager.getClass().getMethod("isSystemLogin").invoke(manager));
-            Class<?> prefsType = Class.forName("com.heytap.health.base.sp.SPUtils", false, loader);
+            Class<?> prefsType = HookResolver.resolveClassByMembers(context, loader,
+                    "com.heytap.health.base.sp.SPUtils", "com.heytap.health.base.", null,
+                    new String[]{"getInstance", "getString"}, new String[0]);
             Object prefs = prefsType.getMethod("getInstance").invoke(null);
             String stored = String.valueOf(prefs.getClass().getMethod("getString", String.class)
                     .invoke(prefs, "user_ssoid"));
