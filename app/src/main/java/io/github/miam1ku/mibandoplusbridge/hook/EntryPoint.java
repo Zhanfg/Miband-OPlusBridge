@@ -51,8 +51,11 @@ public final class EntryPoint extends XposedModule {
 
     private static void detachRuntimeResources() {
         try { MiFitnessOwnershipHook.detach(); } catch (Throwable ignored) {}
+        try { MyDevicesHook.detach(); } catch (Throwable ignored) {}
         try { OHealthWeatherHook.detach(); } catch (Throwable ignored) {}
         try { OHealthHealthImportHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthDeviceHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthSleepHook.detach(); } catch (Throwable ignored) {}
         try { OHealthFindPhoneHook.detach(); } catch (Throwable ignored) {}
         try { OHealthMusicHook.detach(); } catch (Throwable ignored) {}
     }
