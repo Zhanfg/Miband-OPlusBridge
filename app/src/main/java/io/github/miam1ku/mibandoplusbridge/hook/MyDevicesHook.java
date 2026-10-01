@@ -364,6 +364,10 @@ public final class MyDevicesHook {
         }
     }
 
+    public static void detach() {
+        unregister();
+    }
+
     private static synchronized void unregister() {
         ObserverSession session = active;
         active = null;
