@@ -56,6 +56,8 @@ public final class OHealthHealthImportHook {
     private long retryAfter;
     private boolean stressZerosCleared;
     private String lastFailure;
+    private volatile Class<?> touristType;
+    private volatile Class<?> accountHelperType;
     private final Runnable work = this::runScheduled;
 
     private OHealthHealthImportHook(Context context, HostContract host, OHealthSleepWriter sleep,
@@ -178,9 +180,9 @@ public final class OHealthHealthImportHook {
         }
         try {
             ClassLoader loader = host.loader;
-            Class<?> tourist = Class.forName("com.heytap.health.base.tourist.TouristHelper", false, loader);
+            Class<?> tourist = touristHelper();
             boolean guest = Boolean.TRUE.equals(tourist.getMethod("getIsInTouristMode").invoke(null));
-            Class<?> accounts = Class.forName("com.heytap.health.account.AccountHelper", false, loader);
+            Class<?> accounts = accountHelper();
             Object manager = accounts.getMethod("getAccountManager").invoke(null);
             boolean system = manager != null && Boolean.TRUE.equals(
                     manager.getClass().getMethod("isSystemLogin").invoke(manager));
@@ -205,8 +207,7 @@ public final class OHealthHealthImportHook {
     }
     private void keepSystemAccount() {
         try {
-            Class<?> tourist = Class.forName(
-                    "com.heytap.health.base.tourist.TouristHelper", false, host.loader);
+            Class<?> tourist = touristHelper();
             XposedBridge.hookAllMethods(tourist, "setIsInTouristMode", new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (param.args.length == 0 || !Boolean.TRUE.equals(param.args[0])) return;
@@ -214,8 +215,7 @@ public final class OHealthHealthImportHook {
                     param.setResult(null);
                     try {
                         tourist.getMethod("setIsInTouristMode", boolean.class).invoke(null, false);
-                        Class<?> accounts = Class.forName(
-                                "com.heytap.health.account.AccountHelper", false, host.loader);
+                        Class<?> accounts = accountHelper();
                         Object manager = accounts.getMethod("getAccountManager").invoke(null);
                         if (manager != null) {
                             manager.getClass().getMethod("cacheAccountInfo", boolean.class)
@@ -234,9 +234,37 @@ public final class OHealthHealthImportHook {
         }
     }
 
+    private Class<?> touristHelper() throws ClassNotFoundException {
+        Class<?> cached = touristType;
+        if (cached != null) return cached;
+        Class<?> resolved = HookResolver.resolveClassByMembers(context, host.loader,
+                "com.heytap.health.base.tourist.TouristHelper",
+                "com.heytap.health.base.", null,
+                new String[]{"getIsInTouristMode", "setIsInTouristMode"}, new String[0]);
+        touristType = resolved;
+        if (!"com.heytap.health.base.tourist.TouristHelper".equals(resolved.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_TOURIST_HELPER_ADAPTED " + resolved.getName());
+        }
+        return resolved;
+    }
+
+    private Class<?> accountHelper() throws ClassNotFoundException {
+        Class<?> cached = accountHelperType;
+        if (cached != null) return cached;
+        Class<?> resolved = HookResolver.resolveClassByMembers(context, host.loader,
+                "com.heytap.health.account.AccountHelper",
+                "com.heytap.health.account.", null,
+                new String[]{"getAccountManager"}, new String[0]);
+        accountHelperType = resolved;
+        if (!"com.heytap.health.account.AccountHelper".equals(resolved.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_ACCOUNT_HELPER_ADAPTED " + resolved.getName());
+        }
+        return resolved;
+    }
+
     private boolean systemLoggedIn() {
         try {
-            Class<?> accounts = Class.forName("com.heytap.health.account.AccountHelper", false, host.loader);
+            Class<?> accounts = accountHelper();
             Object manager = accounts.getMethod("getAccountManager").invoke(null);
             return manager != null && Boolean.TRUE.equals(
                     manager.getClass().getMethod("isSystemLogin").invoke(manager));
