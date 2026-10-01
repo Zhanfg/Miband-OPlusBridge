@@ -99,11 +99,12 @@ public final class OHealthDeviceHook {
                         }
                     }
                 });
+        Class<?> wearableEventType = null;
         try {
-            Class<?> eventType = XposedHelpers.findClass(
-                    "com.heytap.health.device.flexadapter.refresh.EventType", loader);
-            XposedBridge.hookMethod(HookResolver.resolveMethod(controllerClass,
-                    "refreshView", null, eventType), new XC_MethodHook() {
+            Method refreshView = HookResolver.resolveNamedMethod(controllerClass,
+                    "refreshView", 1, null);
+            wearableEventType = refreshView.getParameterTypes()[0];
+            XposedBridge.hookMethod(refreshView, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     remember(param.thisObject);
                     project(param.thisObject, loader, null, false);
@@ -173,7 +174,7 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_DEVICE_RESET_MAC_UNAVAILABLE "
                     + moved.getClass().getSimpleName());
         }
-        installDevicePages(loader);
+        installDevicePages(loader, wearableEventType);
         installNativePanel(loader);
         observeSnapshots(loader);
     }
@@ -492,9 +493,7 @@ public final class OHealthDeviceHook {
             Map.entry("MenuNotificationItem", "com.heytap.health.device.tab.notify.NotifySettingsActivity"));
 
     /** Discover wearable rows from BaseWearableItem. Names are matched after the scan. */
-    private static void installDevicePages(ClassLoader loader) {
-        Class<?> eventType = XposedHelpers.findClass(
-                "com.heytap.health.device.flexadapter.refresh.EventType", loader);
+    private static void installDevicePages(ClassLoader loader, Class<?> eventType) {
         List<String> items = wearableItemNames(loader);
         if (items.isEmpty()) {
             items = new ArrayList<>();
@@ -529,18 +528,51 @@ public final class OHealthDeviceHook {
     }
 
     private static List<String> wearableItemNames(ClassLoader loader) {
-        Class<?> base;
-        try {
-            base = Class.forName(WEARABLE_ITEM + "BaseWearableItem", false, loader);
-        } catch (ClassNotFoundException missing) {
-            return List.of();
-        }
         android.content.pm.ApplicationInfo info = hostContext.getApplicationInfo();
         List<String> apks = new ArrayList<>();
         if (info.sourceDir != null) apks.add(info.sourceDir);
         if (info.splitSourceDirs != null) {
             for (String split : info.splitSourceDirs) apks.add(split);
         }
+
+        Class<?> base = null;
+        try {
+            base = Class.forName(WEARABLE_ITEM + "BaseWearableItem", false, loader);
+        } catch (ClassNotFoundException moved) {
+            java.util.LinkedHashMap<Class<?>, Integer> parents = new java.util.LinkedHashMap<>();
+            for (String apk : apks) {
+                try {
+                    for (String name : HookResolver.classNames(apk)) {
+                        if (!name.startsWith(WEARABLE_ITEM) || name.indexOf('$') >= 0) continue;
+                        try {
+                            Class<?> type = Class.forName(name, false, loader);
+                            Class<?> parent = type.getSuperclass();
+                            if (parent != null && parent.getName().startsWith(WEARABLE_ITEM)) {
+                                parents.merge(parent, 1, Integer::sum);
+                            }
+                        } catch (Throwable ignored) { }
+                    }
+                } catch (Throwable ignored) { }
+            }
+            int bestCount = 1;
+            boolean tie = false;
+            for (Map.Entry<Class<?>, Integer> entry : parents.entrySet()) {
+                if (entry.getValue() > bestCount) {
+                    base = entry.getKey();
+                    bestCount = entry.getValue();
+                    tie = false;
+                } else if (entry.getValue() == bestCount && bestCount > 1
+                        && base != null && base != entry.getKey()) {
+                    tie = true;
+                }
+            }
+            if (base == null || tie) {
+                Log.i("OplusBandBridge", "OHEALTH_WEARABLE_BASE_UNAVAILABLE");
+                return List.of();
+            }
+            Log.i("OplusBandBridge", "OHEALTH_WEARABLE_BASE_ADAPTED " + base.getName());
+        }
+
         List<String> names = new ArrayList<>();
         for (String apk : apks) {
             try {
@@ -557,8 +589,7 @@ public final class OHealthDeviceHook {
                         names.add(name);
                     }
                 }
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable ignored) { }
         }
         return names;
     }
