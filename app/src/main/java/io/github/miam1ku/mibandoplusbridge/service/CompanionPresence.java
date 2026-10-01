@@ -82,6 +82,24 @@ public final class CompanionPresence {
         }
     }
 
+    public static void stopObserving(Context context) {
+        if (context == null || !supported(context)) return;
+        int associationId = associationId(context);
+        if (associationId < 0) return;
+        CompanionDeviceManager manager = context.getSystemService(CompanionDeviceManager.class);
+        if (manager == null) return;
+        try {
+            manager.stopObservingDevicePresence(new ObservingDevicePresenceRequest.Builder()
+                    .setAssociationId(associationId).build());
+        } catch (RuntimeException unavailable) {
+            SessionLog.line(context, "COMPANION_STOP_OBSERVE_FAILED "
+                    + unavailable.getClass().getSimpleName());
+        } finally {
+            context.getSharedPreferences("companion-presence", Context.MODE_PRIVATE).edit()
+                    .remove("associationId").apply();
+        }
+    }
+
     /**
      * Requests one exact-MAC watch association. The platform owns discovery and
      * confirmation UI; this method never creates a silent/self-managed association.
