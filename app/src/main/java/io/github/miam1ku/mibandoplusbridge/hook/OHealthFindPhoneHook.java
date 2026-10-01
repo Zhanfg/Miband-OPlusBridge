@@ -6,8 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedHelpers;
 import io.github.miam1ku.mibandoplusbridge.integration.HostNotifyProvider;
 import io.github.miam1ku.mibandoplusbridge.notify.FindPhone;
 
