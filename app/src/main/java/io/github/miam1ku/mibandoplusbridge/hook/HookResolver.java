@@ -144,6 +144,30 @@ final class HookResolver {
         }
     }
 
+    /**
+     * Resolve a named vendor method when its parameter type itself moved.
+     * Name + arity + optional return type must identify exactly one method.
+     */
+    static Method resolveNamedMethod(Class<?> owner, String name, int parameterCount,
+            Class<?> returnType) throws NoSuchMethodException {
+        Method found = null;
+        for (Class<?> cursor = owner; cursor != null; cursor = cursor.getSuperclass()) {
+            for (Method method : cursor.getDeclaredMethods()) {
+                if (!name.equals(method.getName()) || method.getParameterCount() != parameterCount) continue;
+                if (returnType != null && method.getReturnType() != returnType) continue;
+                if (found != null && !found.equals(method)) {
+                    throw new NoSuchMethodException("DEX_NAMED_METHOD_AMBIGUOUS "
+                            + owner.getName() + "#" + name + "/" + parameterCount);
+                }
+                found = method;
+            }
+        }
+        if (found == null) throw new NoSuchMethodException(
+                owner.getName() + "#" + name + "/" + parameterCount);
+        found.setAccessible(true);
+        return found;
+    }
+
     static Method resolveMethod(Class<?> owner, String stableName, Class<?> returnType,
             Class<?>... parameters) throws NoSuchMethodException {
         for (Class<?> cursor = owner; cursor != null; cursor = cursor.getSuperclass()) {
