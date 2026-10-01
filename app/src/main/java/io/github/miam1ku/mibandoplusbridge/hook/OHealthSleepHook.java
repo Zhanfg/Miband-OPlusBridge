@@ -47,6 +47,8 @@ public final class OHealthSleepHook {
     private static final java.util.Set<Object> BINDING = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private static Context context;
     private static ClassLoader loader;
+    private static HandlerThread workerThread;
+    private static ContentObserver recordsObserver;
     private static Handler worker;
     private static Object dateUtils;
     private static Object manager;
@@ -72,6 +74,7 @@ public final class OHealthSleepHook {
         accountCompanion = singleton("com.heytap.device.data.storage.DataRepositoryHelper", "Companion");
         HandlerThread thread = new HandlerThread("OplusBandSleepRead");
         thread.start();
+        workerThread = thread;
         worker = new Handler(thread.getLooper());
         hookHome();
         hookDay();
@@ -106,10 +109,43 @@ public final class OHealthSleepHook {
                 requestLoad();
             }
         };
+        recordsObserver = observer;
         context.getContentResolver().registerContentObserver(HealthQueueProvider.RECORDS_URI, true, observer);
         context.getContentResolver().registerContentObserver(DeviceCardProvider.URI, false, observer);
         installed = true;
         requestLoad();
+    }
+
+    public static synchronized void detach() {
+        Context app = context;
+        ContentObserver observer = recordsObserver;
+        Handler background = worker;
+        HandlerThread thread = workerThread;
+        installed = false;
+        context = null;
+        loader = null;
+        worker = null;
+        workerThread = null;
+        recordsObserver = null;
+        dateUtils = null;
+        manager = null;
+        allRole = null;
+        accountCompanion = null;
+        observedAccount = "";
+        cache = Cache.empty();
+        refreshingNavigation = false;
+        if (app != null && observer != null) {
+            try { app.getContentResolver().unregisterContentObserver(observer); }
+            catch (RuntimeException ignored) {}
+        }
+        if (background != null) background.removeCallbacksAndMessages(null);
+        MAIN.removeCallbacksAndMessages(null);
+        if (thread != null) thread.quitSafely();
+        synchronized (HOMES) { HOMES.clear(); }
+        synchronized (DAYS) { DAYS.clear(); }
+        synchronized (NAVIGATION) { NAVIGATION.clear(); }
+        synchronized (TOOLBARS) { TOOLBARS.clear(); }
+        synchronized (BINDING) { BINDING.clear(); }
     }
 
     private static Object singleton(String name, String field) throws Exception {
