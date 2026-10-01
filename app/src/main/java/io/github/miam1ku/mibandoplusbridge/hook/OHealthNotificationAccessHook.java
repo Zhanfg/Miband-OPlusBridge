@@ -29,17 +29,21 @@ public final class OHealthNotificationAccessHook {
         };
         Set<Class<?>> utilities = new LinkedHashSet<>();
         try {
-            Class<?> companion = Class.forName(COMPANION, false, loader);
+            Class<?> companion = HookResolver.resolveClassByMembers(hostContext, loader, COMPANION,
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"isNotificationListenerEnabled"}, new String[0], true);
             XposedBridge.hookAllMethods(companion, "isNotificationListenerEnabled", grant);
             utilities.add(companion);
-        } catch (ClassNotFoundException moved) {
+        } catch (Throwable moved) {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_COMPANION_MOVED");
         }
         try {
-            Class<?> util = Class.forName(UTIL, false, loader);
+            Class<?> util = HookResolver.resolveClassByMembers(hostContext, loader, UTIL,
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"isNotificationListenerEnabled"}, new String[0]);
             XposedBridge.hookAllMethods(util, "isNotificationListenerEnabled", grant);
             utilities.add(util);
-        } catch (ClassNotFoundException moved) {
+        } catch (Throwable moved) {
             Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_UTIL_MOVED");
         }
         if (utilities.isEmpty()) {
