@@ -12,7 +12,14 @@ import android.os.Process;
 import android.os.UserManager;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandHistoryParser.Measurement;
+import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.HealthRecordStore;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Set;
 import org.json.JSONObject;
 
 /** Private CE outbox: the signed host can read only its confirmed account's records. */
