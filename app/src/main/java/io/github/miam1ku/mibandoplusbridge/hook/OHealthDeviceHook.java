@@ -989,8 +989,11 @@ public final class OHealthDeviceHook {
     private static boolean openHealthApp(android.app.Activity activity) {
         try {
             Object mac = XposedHelpers.getObjectField(activity, "mMac");
-            Intent intent = new Intent();
-            intent.setClassName(HOST, "com.heytap.health.main.MainActivity");
+            Intent intent = activity.getPackageManager().getLaunchIntentForPackage(HOST);
+            if (intent == null) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_OPEN_APP_UNAVAILABLE launch-intent");
+                return false;
+            }
             if (mac != null) {
                 String address = String.valueOf(mac);
                 if (!address.isBlank() && !"null".equals(address)) intent.putExtra("currentMac", address);
