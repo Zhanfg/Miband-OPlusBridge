@@ -115,14 +115,17 @@ public final class OwnershipController {
         return true;
     }
 
-    private static boolean awaitHookAck(long generation, long timeoutMs) {
-        long deadline = android.os.SystemClock.elapsedRealtime() + Math.max(1, timeoutMs);
+    static boolean awaitHookAck(long generation, long timeoutMs) {
+        long deadline = System.nanoTime()
+                + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMs));
         synchronized (ACK_MONITOR) {
             while (acknowledgedGeneration < generation) {
-                long remaining = deadline - android.os.SystemClock.elapsedRealtime();
-                if (remaining <= 0) return false;
+                long remainingNanos = deadline - System.nanoTime();
+                if (remainingNanos <= 0) return false;
+                long waitMs = Math.max(1,
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos));
                 try {
-                    ACK_MONITOR.wait(remaining);
+                    ACK_MONITOR.wait(waitMs);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return false;
