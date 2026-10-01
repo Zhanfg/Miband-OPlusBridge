@@ -3,9 +3,6 @@ package io.github.miam1ku.mibandoplusbridge.hook;
 
 import android.content.Context;
 import android.os.Bundle;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 import io.github.miam1ku.mibandoplusbridge.data.AuthToken;
 import io.github.miam1ku.mibandoplusbridge.integration.CredentialProvider;
 import java.lang.reflect.Method;
