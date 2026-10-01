@@ -549,18 +549,14 @@ public final class MainActivity extends AppCompatActivity {
             ownershipStatus.setText("请先解锁手机，再管理设备。");
             return;
         }
-        if (!hasBluetoothPermission()) {
-            pendingPermission = change;
-            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_PERMISSION);
-            return;
-        }
         new MaterialAlertDialogBuilder(this)
-                .setTitle(change == Change.ADD ? "添加到健康并接管？" : "连接这只手环？")
+                .setTitle(change == Change.ADD ? "添加到健康并启用共存？" : "重新启用共存？")
                 .setMessage(change == Change.ADD
-                        ? "将通过 LSPosed 让小米运动健康释放这只手环的蓝牙连接，再由本应用接管。请先结束表盘、OTA 和 NFC。绑定和健康历史会保留。"
-                        : "请先结束小米运动健康的表盘、OTA 和 NFC。LSPosed 只阻止这只手环的官方连接，不会禁用小米运动健康。")
+                        ? "小米运动健康继续负责蓝牙连接、鉴权和重连；桥接只镜像已解析健康数据并映射到 OHealth。正常运行不再长期抢占蓝牙连接。"
+                        : "恢复共存桥接。小米运动健康仍是手环连接的主托管方。")
                 .setNegativeButton("取消", null)
-                .setPositiveButton(change == Change.ADD ? "添加并接管" : "连接", (dialog, which) -> changeOwnership(change))
+                .setPositiveButton(change == Change.ADD ? "添加并共存" : "启用共存",
+                        (dialog, which) -> changeOwnership(change))
                 .show();
     }
 
