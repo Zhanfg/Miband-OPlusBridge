@@ -35,6 +35,7 @@ import io.github.miam1ku.mibandoplusbridge.ui.BridgeScreen;
 import io.github.miam1ku.mibandoplusbridge.ui.SetupProgress;
 import io.github.miam1ku.mibandoplusbridge.integration.CredentialProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
+import io.github.miam1ku.mibandoplusbridge.integration.OwnershipProvider;
 import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
@@ -365,7 +366,7 @@ public final class MainActivity extends AppCompatActivity {
                     BandLiveService.start(this);
                 }
                 message = !registered
-                        ? (needsOfficialRestore() ? "尚未登记，官方应用仍处于暂停状态。可添加设备或恢复官方管理。" : "尚未添加设备。")
+                        ? (needsOfficialRestore() ? "尚未登记，桥接 transport 仍处于接管状态。可添加设备或恢复官方管理。" : "尚未添加设备。")
                         : "NATIVE".equals(owner.mode())
                                 ? (lspVerified ? "已由桥接管理。连接状态以设备实际响应为准。"
                                         : "已登记为桥接管理，但 LSPosed 102 尚未验证；暂不启动蓝牙会话。")
