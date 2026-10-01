@@ -44,6 +44,7 @@ public final class EntryPoint extends XposedModule {
     }
 
     @Override public boolean onHotReloading(@NonNull HotReloadingParam param) {
+        try { MiFitnessOwnershipHook.detach(); } catch (Throwable ignored) {}
         param.setSavedInstanceState(activePackage);
         return true;
     }
