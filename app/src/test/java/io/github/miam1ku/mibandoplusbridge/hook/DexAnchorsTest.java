@@ -136,7 +136,7 @@ public final class DexAnchorsTest {
         buf.putShort(methodIdsOff + 2, (short) 0);
         buf.putInt(methodIdsOff + 4, 1);
 
-        int classDataOff = 0xd0;
+        int classDataOff = 0xe0;
         int codeOff = 0x100;
         buf.putInt(classDefsOff, 0);
         buf.putInt(classDefsOff + 4, 1);
