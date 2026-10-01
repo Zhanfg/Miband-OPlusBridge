@@ -11,7 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -519,7 +521,7 @@ public final class HealthRecordStore extends SQLiteOpenHelper {
                 if (enqueue(db, account, stage).added()) changed++;
             }
             for (SleepStageAlign.Interval interval : owned) {
-                List<String> keep = new ArrayList<>();
+                Set<String> keep = new HashSet<>();
                 for (Measurement stage : stages) {
                     if (stage.startMs < interval.endMs() && stage.endMs > interval.startMs()) keep.add(stage.recordId);
                 }
