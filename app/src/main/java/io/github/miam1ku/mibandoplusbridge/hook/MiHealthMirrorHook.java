@@ -58,28 +58,29 @@ public final class MiHealthMirrorHook {
     }
 
     private static void mirror(Context context, String persistKey, String sid, List<?> models) {
-        ArrayList<Row> rows = new ArrayList<>(Math.min(models.size(), 256));
+        ArrayList<Row> rows = new ArrayList<>(Math.min(models.size() * 2, 512));
         for (Object model : models) {
             if (model == null) continue;
             try {
                 Object item = XposedHelpers.callMethod(model, "getItem");
+                if (item == null) continue;
+                String simple = item.getClass().getSimpleName();
+                if ("DayNightSleepReport".equals(simple) || "SleepSegmentReport".equals(simple)) {
+                    appendSleepRows(persistKey, sid, model, item, rows);
+                    continue;
+                }
                 Row row = row(persistKey, sid, model, item);
                 if (row != null) rows.add(row);
             } catch (Throwable ignored) { }
         }
         if (rows.isEmpty()) return;
 
-        for (int offset = 0; offset < rows.size(); offset += BATCH) {
-            int end = Math.min(rows.size(), offset + BATCH);
-            Bundle payload = bundle(rows.subList(offset, end));
-            ThreadPoolExecutor queue = writer;
-            if (queue == null || queue.isShutdown()) return;
-            try {
-                queue.execute(() -> push(context, payload));
-            } catch (RuntimeException full) {
-                Log.i(TAG, "MI_HEALTH_MIRROR_QUEUE_FULL");
-                return;
-            }
+        ThreadPoolExecutor queue = writer;
+        if (queue == null || queue.isShutdown()) return;
+        try {
+            queue.execute(() -> pushRows(context, rows));
+        } catch (RuntimeException full) {
+            Log.i(TAG, "MI_HEALTH_MIRROR_QUEUE_FULL");
         }
     }
 
@@ -131,7 +132,49 @@ public final class MiHealthMirrorHook {
         String timezone = zone instanceof String text ? text : "";
         String sourceKey = persistKey + "|" + sid + "|" + timestamp + "|" + item.getClass().getName();
         return new Row(sourceKey, kind, startMs, startMs + 60_000L,
-                value, distance, calories, timezone);
+                value, distance, calories, -1, false, timezone);
+    }
+
+    private static void appendSleepRows(String persistKey, String sid, Object model, Object item,
+            List<Row> rows) {
+        long bed = toMillis(number(item, "getBedTime"));
+        long wake = toMillis(number(item, "getWakeUpTime"));
+        if (wake <= 0) wake = toMillis(number(item, "getWakeupTime"));
+        if (bed <= 0 || wake <= bed) return;
+
+        Object zone = safeCall(model, "getZoneName");
+        String timezone = zone instanceof String text ? text : "";
+        boolean complete = false;
+        Object modelComplete = safeCall(model, "isCompleteSleep");
+        if (modelComplete instanceof Boolean value) {
+            complete = value;
+        } else {
+            Object incomplete = safeCall(item, "isUncomplete");
+            if (incomplete instanceof Boolean value) complete = !value;
+            else {
+                Object valid = safeCall(item, "isValidSleep");
+                complete = valid instanceof Boolean value && value;
+            }
+        }
+
+        String base = persistKey + "|" + sid + "|" + item.getClass().getName() + "|" + bed;
+        rows.add(new Row(base + "|session", "sleep_interval", bed, wake,
+                0, -1, -1, -1, complete, timezone));
+
+        Object rawStages = safeCall(item, "getSleepItems");
+        if (!(rawStages instanceof List<?> stages)) return;
+        for (Object stageItem : stages) {
+            if (stageItem == null) continue;
+            long start = toMillis(number(stageItem, "getStartTime"));
+            long end = toMillis(number(stageItem, "getEndTime"));
+            int stage = (int) number(stageItem, "getSleepState");
+            if (stage < 2 || stage > 5) continue;
+            start = Math.max(start, bed);
+            end = Math.min(end, wake);
+            if (start <= 0 || end <= start) continue;
+            rows.add(new Row(base + "|stage|" + start, "sleep_stage", start, end,
+                    0, -1, -1, stage, false, timezone));
+        }
     }
 
     private static Bundle bundle(List<Row> rows) {
@@ -143,6 +186,8 @@ public final class MiHealthMirrorHook {
         int[] values = new int[size];
         int[] distances = new int[size];
         int[] calories = new int[size];
+        int[] stages = new int[size];
+        boolean[] completes = new boolean[size];
         String[] timezones = new String[size];
         for (int i = 0; i < size; i++) {
             Row row = rows.get(i);
@@ -153,6 +198,8 @@ public final class MiHealthMirrorHook {
             values[i] = row.value;
             distances[i] = row.distance;
             calories[i] = row.calories;
+            stages[i] = row.stage;
+            completes[i] = row.complete;
             timezones[i] = row.timezone;
         }
         Bundle payload = new Bundle();
@@ -163,23 +210,30 @@ public final class MiHealthMirrorHook {
         payload.putIntArray("values", values);
         payload.putIntArray("distances", distances);
         payload.putIntArray("calories", calories);
+        payload.putIntArray("stages", stages);
+        payload.putBooleanArray("completes", completes);
         payload.putStringArray("timezones", timezones);
         return payload;
     }
 
-    private static void push(Context context, Bundle payload) {
-        try {
-            Bundle result = context.getContentResolver().call(
-                    HealthQueueProvider.URI, "mirrorBatch", null, payload);
-            if (result != null) {
-                Log.i(TAG, "MI_HEALTH_MIRROR "
-                        + result.getString("status", "unknown")
-                        + " added=" + result.getInt("added", 0));
+    private static void pushRows(Context context, List<Row> rows) {
+        for (int offset = 0; offset < rows.size(); offset += BATCH) {
+            int end = Math.min(rows.size(), offset + BATCH);
+            Bundle payload = bundle(rows.subList(offset, end));
+            try {
+                Bundle result = context.getContentResolver().call(
+                        HealthQueueProvider.URI, "mirrorBatch", null, payload);
+                if (result != null && result.getInt("added", 0) > 0) {
+                    Log.i(TAG, "MI_HEALTH_MIRROR "
+                            + result.getString("status", "unknown")
+                            + " added=" + result.getInt("added", 0));
+                }
+            } catch (RuntimeException rejected) {
+                Log.i(TAG, "MI_HEALTH_MIRROR_REJECTED " + rejected.getClass().getSimpleName());
+                return;
+            } finally {
+                payload.clear();
             }
-        } catch (RuntimeException rejected) {
-            Log.i(TAG, "MI_HEALTH_MIRROR_REJECTED " + rejected.getClass().getSimpleName());
-        } finally {
-            payload.clear();
         }
     }
 
@@ -199,5 +253,6 @@ public final class MiHealthMirrorHook {
     }
 
     private record Row(String sourceKey, String kind, long startMs, long endMs,
-                       int value, int distance, int calories, String timezone) {}
+                       int value, int distance, int calories, int stage,
+                       boolean complete, String timezone) {}
 }
