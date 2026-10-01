@@ -526,7 +526,7 @@ public final class OHealthDeviceHook {
         List<String> names = new ArrayList<>();
         for (String apk : apks) {
             try {
-                for (String name : DexAnchors.classNames(apk)) {
+                for (String name : HookResolver.classNames(apk)) {
                     if (!name.startsWith(WEARABLE_ITEM) || name.indexOf('$') >= 0) continue;
                     Class<?> type;
                     try {
