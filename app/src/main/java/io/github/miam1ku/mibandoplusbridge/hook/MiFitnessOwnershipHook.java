@@ -86,6 +86,7 @@ public final class MiFitnessOwnershipHook {
                 State state = refreshState();
                 signalOnline();
                 if (state.nativeOwned) releaseOfficialLinks();
+                if (state.coexist) MiHealthMirrorHook.requestBackfill(state.generation);
                 acknowledge(state.generation);
             }
         };
@@ -93,6 +94,7 @@ public final class MiFitnessOwnershipHook {
         State initial = refreshState();
         signalOnline();
         if (initial.nativeOwned) releaseOfficialLinks();
+        if (initial.coexist) MiHealthMirrorHook.requestBackfill(initial.generation);
         acknowledge(initial.generation);
     }
 
@@ -140,6 +142,7 @@ public final class MiFitnessOwnershipHook {
             Bundle reply = context.getContentResolver().call(OwnershipProvider.URI, "state", null, null);
             if (reply == null) return cachedState;
             State state = new State(reply.getBoolean("native", false),
+                    reply.getBoolean("coexist", false),
                     reply.getString("mac", ""), reply.getLong("generation", 0));
             cachedState = state;
             return state;
@@ -188,7 +191,7 @@ public final class MiFitnessOwnershipHook {
         try { gatt.close(); } catch (RuntimeException ignored) {}
     }
 
-    private record State(boolean nativeOwned, String mac, long generation) {
-        static final State EMPTY = new State(false, "", 0);
+    private record State(boolean nativeOwned, boolean coexist, String mac, long generation) {
+        static final State EMPTY = new State(false, false, "", 0);
     }
 }
