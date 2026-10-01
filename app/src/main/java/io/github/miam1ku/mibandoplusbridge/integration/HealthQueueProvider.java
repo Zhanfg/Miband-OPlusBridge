@@ -242,6 +242,68 @@ public final class HealthQueueProvider extends ContentProvider {
         }
     }
 
+    private Bundle mirrorBatch(Bundle extras) {
+        if (extras == null) throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_REQUIRED");
+        String[] sourceKeys = extras.getStringArray("sourceKeys");
+        String[] kinds = extras.getStringArray("kinds");
+        long[] starts = extras.getLongArray("starts");
+        long[] ends = extras.getLongArray("ends");
+        int[] values = extras.getIntArray("values");
+        int[] distances = extras.getIntArray("distances");
+        String[] timezones = extras.getStringArray("timezones");
+        int size = sourceKeys == null ? -1 : sourceKeys.length;
+        if (size <= 0 || size > 64 || kinds == null || starts == null || ends == null
+                || values == null || distances == null || timezones == null
+                || kinds.length != size || starts.length != size || ends.length != size
+                || values.length != size || distances.length != size || timezones.length != size) {
+            throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_INVALID");
+        }
+
+        String deviceId = new BandStateRepository(getContext()).registeredDeviceId();
+        if (deviceId.isBlank()) return status("DEVICE_NOT_REGISTERED");
+        if (store.confirmedAccountHash() == null) return status("HEALTH_ACCOUNT_UNCONFIRMED");
+
+        ArrayList<Measurement> batch = new ArrayList<>(size);
+        Set<String> supported = Set.of("steps_interval", "heart_rate", "spo2", "stress");
+        for (int i = 0; i < size; i++) {
+            String source = sourceKeys[i];
+            String kind = kinds[i];
+            if (source == null || source.isBlank() || source.length() > 256 || !supported.contains(kind)
+                    || starts[i] < 0 || ends[i] <= starts[i]) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID");
+            }
+            if (!"steps_interval".equals(kind) && ends[i] - starts[i] != 60_000L) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_INTERVAL_INVALID");
+            }
+            JSONObject row = new JSONObject();
+            try {
+                row.put("recordId", "mi:" + kind + ":" + sha256(source));
+                row.put("deviceId", deviceId);
+                row.put("kind", kind);
+                row.put("startMs", starts[i]);
+                row.put("endMs", ends[i]);
+                row.put("value", values[i]);
+                row.put("stage", JSONObject.NULL);
+                if (timezones[i] != null && !timezones[i].isBlank()) row.put("timezone", timezones[i]);
+                row.put("measurementMode", "continuous");
+                row.put("complete", false);
+                if ("steps_interval".equals(kind) && distances[i] >= 0) row.put("distance", distances[i]);
+                row.put("sourceFingerprint", sha256(kind + "|" + starts[i] + "|" + ends[i]
+                        + "|" + values[i] + "|" + distances[i] + "|" + timezones[i]));
+                batch.add(Measurement.fromJson(row));
+            } catch (org.json.JSONException invalid) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID", invalid);
+            }
+        }
+
+        HealthRecordStore.BatchResult result = store.enqueueMeasurements(batch);
+        if (result.added() > 0) notifyRecordsChanged();
+        Bundle reply = status(result.added() > 0 ? "HEALTH_MIRRORED" : "HEALTH_MIRROR_UNCHANGED");
+        reply.putInt("added", result.added());
+        reply.putInt("unchanged", result.unchanged());
+        return reply;
+    }
+
     private static String sha256(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
