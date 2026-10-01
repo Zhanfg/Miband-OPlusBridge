@@ -23,7 +23,21 @@ jobs:
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
-      - name: Unit tests
+      - name: Test and assemble debug APK
         env:
           TZ: Asia/Shanghai
-        run: chmod +x ./gradlew && ./gradlew --no-daemon :app:testDebugUnitTest
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Verify LSPosed 102 package metadata
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -p "$APK" META-INF/xposed/module.prop | grep -Fx 'targetApiVersion=102'
+          unzip -p "$APK" META-INF/xposed/module.prop | grep -Fx 'autoHotReload=true'
+          unzip -p "$APK" META-INF/xposed/java_init.list             | grep -Fx 'io.github.miam1ku.mibandoplusbridge.hook.EntryPoint'
+          if unzip -Z1 "$APK" | grep -Fx 'assets/xposed_init'; then
+            echo "legacy xposed_init must not be packaged" >&2
+            exit 1
+          fi
