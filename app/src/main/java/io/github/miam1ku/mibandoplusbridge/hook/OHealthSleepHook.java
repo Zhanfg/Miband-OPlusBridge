@@ -68,10 +68,15 @@ public final class OHealthSleepHook {
         Context app = supplied.getApplicationContext();
         context = app == null ? supplied : app;
         loader = hostLoader;
-        dateUtils = singleton("com.heytap.health.healthbase.util.HealthDateUtils", "INSTANCE");
-        manager = singleton("com.heytap.health.devicemanager.client.DMHeytap", "managerApi");
-        allRole = singleton("com.heytap.health.devicemanager.client.role.DeviceBasegetRole$All", "INSTANCE");
-        accountCompanion = singleton("com.heytap.device.data.storage.DataRepositoryHelper", "Companion");
+        dateUtils = singleton("com.heytap.health.healthbase.util.HealthDateUtils",
+                "com.heytap.health.healthbase.", "INSTANCE",
+                new String[]{"getSleepStartTime", "getSleepEndTime", "getCurDayMinTime"}, false);
+        manager = singleton("com.heytap.health.devicemanager.client.DMHeytap",
+                "com.heytap.health.devicemanager.", "managerApi", new String[0], false);
+        allRole = singleton("com.heytap.health.devicemanager.client.role.DeviceBasegetRole$All",
+                "com.heytap.health.devicemanager.", "INSTANCE", new String[0], true);
+        accountCompanion = singleton("com.heytap.device.data.storage.DataRepositoryHelper",
+                "com.heytap.device.data.storage.", "Companion", new String[0], false);
         HandlerThread thread = new HandlerThread("OplusBandSleepRead");
         thread.start();
         workerThread = thread;
@@ -148,8 +153,11 @@ public final class OHealthSleepHook {
         synchronized (BINDING) { BINDING.clear(); }
     }
 
-    private static Object singleton(String name, String field) throws Exception {
-        return Class.forName(name, false, loader).getField(field).get(null);
+    private static Object singleton(String name, String prefix, String field,
+            String[] methods, boolean allowInner) throws Exception {
+        Class<?> type = HookResolver.resolveClassByMembers(context, loader, name, prefix, null,
+                methods, new String[]{field}, allowInner);
+        return type.getField(field).get(null);
     }
 
     private static void requestLoad() {
@@ -238,7 +246,10 @@ public final class OHealthSleepHook {
     private static long dayStart(long time) { return ((Number) XposedHelpers.callMethod(dateUtils, "getCurDayMinTime", time)).longValue(); }
 
     private static void hookHome() throws Exception {
-        Class<?> card = Class.forName(CARD, false, loader);
+        Class<?> card = HookResolver.resolveClassByMembers(context, loader, CARD,
+                "com.heytap.health.main.card.", null,
+                new String[]{"onCommonBindViewHolder", "refreshViewIfNeed"},
+                new String[]{"healthCommonCardView"});
         XposedBridge.hookAllMethods(card, "onCommonBindViewHolder", new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam p) {
                 restoreHome(p.thisObject);
@@ -282,7 +293,9 @@ public final class OHealthSleepHook {
     }
 
     private static void hookDay() throws Exception {
-        Class<?> holder = Class.forName(PAGE + "$ChartPageAdapter$ViewHolder", false, loader);
+        Class<?> holder = HookResolver.resolveClassByMembers(context, loader,
+                PAGE + "$ChartPageAdapter$ViewHolder", "com.heytap.health.sleep.day.view.", null,
+                new String[]{"init"}, new String[]{"contentView"}, true);
         XposedBridge.hookAllMethods(holder, "init", new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam p) {
                 DaySurface old = DAYS.get(p.thisObject);
@@ -297,7 +310,10 @@ public final class OHealthSleepHook {
                 }
             }
         });
-        XposedBridge.hookAllMethods(Class.forName(PAGE + "$ChartPageAdapter", false, loader), "instantiateItem", new XC_MethodHook() {
+        Class<?> adapter = HookResolver.resolveClassByMembers(context, loader,
+                PAGE + "$ChartPageAdapter", "com.heytap.health.sleep.day.view.", null,
+                new String[]{"instantiateItem"}, new String[]{"this$0"}, true);
+        XposedBridge.hookAllMethods(adapter, "instantiateItem", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 if (!(p.getResult() instanceof View)) return;
                 View root = (View) p.getResult();
@@ -334,7 +350,10 @@ public final class OHealthSleepHook {
     }
 
     private static void hookNavigation() throws Exception {
-        XposedBridge.hookAllMethods(Class.forName(LOAD, false, loader), "getAllDataList", new XC_MethodHook() {
+        Class<?> loadType = HookResolver.resolveClassByMembers(context, loader, LOAD,
+                "com.heytap.health.sleep.day.", null,
+                new String[]{"getAllDataList"}, new String[]{"sleepDayControlModel"});
+        XposedBridge.hookAllMethods(loadType, "getAllDataList", new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam p) {
                 if (!refreshingNavigation) NAVIGATION.put(p.thisObject,
                         new Navigation(((Number) p.args[0]).longValue(), ((Number) p.args[1]).longValue(), ((Number) p.args[2]).longValue()));
@@ -352,7 +371,10 @@ public final class OHealthSleepHook {
                 XposedHelpers.callMethod(control, "setBorderEndTime", p.args[1]);
             }
         });
-        XposedBridge.hookAllMethods(Class.forName(DAY_CARD, false, loader), "refreshCardView", new XC_MethodHook() {
+        Class<?> dayCard = HookResolver.resolveClassByMembers(context, loader, DAY_CARD,
+                "com.heytap.health.sleep.day.", null,
+                new String[]{"refreshCardView"}, new String[]{"fragment", "lastRefreshTimestamp"});
+        XposedBridge.hookAllMethods(dayCard, "refreshCardView", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 if (p.args.length != 1 || !(p.args[0] instanceof Long)) return;
                 Object fragment = field(p.thisObject, "fragment");
@@ -361,8 +383,11 @@ public final class OHealthSleepHook {
                 if (navigation != null) navigation.selectedDate = ((Number) field(p.thisObject, "lastRefreshTimestamp")).longValue();
             }
         });
-        XposedBridge.hookAllMethods(Class.forName("com.heytap.health.sleep.day.viewmodel.SleepDayControlModel", false, loader),
-                "changeSelectTime", new XC_MethodHook() {
+        Class<?> control = HookResolver.resolveClassByMembers(context, loader,
+                "com.heytap.health.sleep.day.viewmodel.SleepDayControlModel",
+                "com.heytap.health.sleep.day.", null,
+                new String[]{"changeSelectTime"}, new String[0]);
+        XposedBridge.hookAllMethods(control, "changeSelectTime", new XC_MethodHook() {
                     @Override protected void afterHookedMethod(MethodHookParam p) {
                         for (Map.Entry<Object, Navigation> entry : NAVIGATION.entrySet()) {
                             if (field(entry.getKey(), "sleepDayControlModel") == p.thisObject) {
@@ -374,7 +399,10 @@ public final class OHealthSleepHook {
     }
 
     private static void hookToolbar() throws Exception {
-        XposedBridge.hookAllMethods(Class.forName(HISTORY, false, loader), "onResume", new XC_MethodHook() {
+        Class<?> history = HookResolver.resolveClassByMembers(context, loader, HISTORY,
+                "com.heytap.health.sleep.", android.app.Activity.class,
+                new String[]{"onResume"}, new String[]{"toolbar"});
+        XposedBridge.hookAllMethods(history, "onResume", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 Object toolbar = field(p.thisObject, "toolbar");
                 if (toolbar != null && !TOOLBARS.containsKey(toolbar)) {
