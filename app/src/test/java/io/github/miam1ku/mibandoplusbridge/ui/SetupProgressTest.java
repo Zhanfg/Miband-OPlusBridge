@@ -11,7 +11,7 @@ public final class SetupProgressTest {
         SetupProgress progress = new SetupProgress(false, true, true, false, false, false);
         assertEquals(SetupProgress.Step.HOOK, progress.current());
         assertTrue(progress.showChecklist());
-        assertEquals("检查 LSPosed", progress.primaryLabel());
+        assertEquals("验证 LSPosed", progress.primaryLabel());
     }
 
     @Test public void missingBindingIsImportEvenWhenUnregistered() {
