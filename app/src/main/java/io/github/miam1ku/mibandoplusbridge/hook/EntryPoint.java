@@ -8,6 +8,7 @@ import android.util.Pair;
 import androidx.annotation.NonNull;
 import io.github.libxposed.api.XposedModule;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
+import io.github.miam1ku.mibandoplusbridge.OHealthHostProfile;
 import java.lang.reflect.Executable;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -232,7 +233,8 @@ public final class EntryPoint extends XposedModule {
 
     private static void installHealth(Context context, ClassLoader loader) {
         if (context == null || !healthInstalled.compareAndSet(false, true)) return;
-        android.util.Log.i("OplusBandBridge", "OHEALTH_HOOKS_BEGIN");
+        OHealthHostProfile.Profile profile = OHealthHostProfile.detect(context);
+        android.util.Log.i("OplusBandBridge", "OHEALTH_HOOKS_BEGIN " + profile.diagnostic());
         try {
             OHealthWeatherHook.install(context, loader);
             android.util.Log.i("OplusBandBridge", "OHEALTH_WEATHER_HOOK_INSTALLED");
