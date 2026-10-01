@@ -748,8 +748,39 @@ public final class MainActivity extends AppCompatActivity {
             case IMPORT -> startBindingImport();
             case PROFILE -> startProfileCapture();
             case ADD -> requestNative(Change.ADD);
-            case DONE -> requestNative(Change.RECONNECT);
+            case DONE -> requestCoexistHealthSync();
         }
+    }
+
+    private void requestCoexistHealthSync() {
+        if (worker.isShutdown() || changingOwnership) return;
+        if (!lspVerified || !lspHookLiveNow()) {
+            verifyLsp();
+            return;
+        }
+        changingOwnership = true;
+        updateControls();
+        ownershipStatus.setText("正在请求小米运动健康后台同步并镜像到 OHealth…");
+        worker.execute(() -> {
+            String message;
+            try {
+                OwnershipController owner = new OwnershipController(this);
+                if (!owner.coexistReady()) owner.enableCoexist();
+                long generation = owner.requestCoexistSync();
+                message = "已请求共存同步（generation " + generation
+                        + "）。小米继续托管连接，新增与最近 48 小时健康数据将映射到 OHealth。";
+            } catch (Exception failure) {
+                message = "共存同步请求失败。" + failureHint(failure);
+            }
+            String visible = message;
+            main.post(() -> {
+                if (isDestroyed()) return;
+                changingOwnership = false;
+                ownershipStatus.setText(visible);
+                updateControls();
+                refreshDevice();
+            });
+        });
     }
 
     private void refreshDevice() {
