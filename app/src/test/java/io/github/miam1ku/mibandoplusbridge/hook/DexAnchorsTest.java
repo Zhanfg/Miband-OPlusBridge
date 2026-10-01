@@ -71,20 +71,20 @@ public final class DexAnchorsTest {
     }
 
     @Test public void stableNameWinsStructuralResolution() throws Exception {
-        Method method = DexAnchors.resolveMethod(Stable.class, "refreshWearableDeviceList", void.class,
+        Method method = HookResolver.resolveMethod(Stable.class, "refreshWearableDeviceList", void.class,
                 java.util.List.class, java.util.List.class, String.class);
         assertEquals("refreshWearableDeviceList", method.getName());
     }
 
     @Test public void uniqueSignatureSurvivesMethodRename() throws Exception {
-        Method method = DexAnchors.resolveMethod(Renamed.class, "refreshWearableDeviceList", void.class,
+        Method method = HookResolver.resolveMethod(Renamed.class, "refreshWearableDeviceList", void.class,
                 java.util.List.class, java.util.List.class, String.class);
         assertEquals("a", method.getName());
     }
 
     @Test public void ambiguousSignatureFailsClosed() {
         assertThrows(NoSuchMethodException.class,
-                () -> DexAnchors.resolveMethod(Ambiguous.class, "missing", void.class, String.class));
+                () -> HookResolver.resolveMethod(Ambiguous.class, "missing", void.class, String.class));
     }
 
     private static void put(ZipOutputStream zip, String name, byte[] bytes) throws IOException {
