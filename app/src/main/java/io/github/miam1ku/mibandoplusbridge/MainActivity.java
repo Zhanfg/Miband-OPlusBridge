@@ -867,7 +867,11 @@ public final class MainActivity extends AppCompatActivity {
         }
         String code = response.getString("status", "CREDENTIAL_STORAGE_FAILED");
         String text = switch (code) {
-            case "IMPORT_WINDOW_OPEN" -> "导入窗口已开启。请在小米运动健康中打开所选设备，让官方应用重新读取绑定信息。";
+            case "IMPORT_WINDOW_OPEN" -> response.getBoolean("importHookSeen", false)
+                    ? "导入 Hook 已响应本次窗口。请停留在小米运动健康的手环设备页，正在等待设备信息。"
+                    : response.getBoolean("importHookOnline", false)
+                            ? "导入 Hook 已加载，但还没看到本次设备读取。请在小米运动健康中打开所选手环并停留几秒。"
+                            : "导入窗口已开启，但尚未检测到 Mi Fitness 导入 Hook。请确认 LSPosed 已勾选小米运动健康，然后重新打开官方应用。";
             case "IMPORT_WINDOW_CLOSED" -> "所有导入和协议采集窗口均已关闭。";
             case "DIAGNOSTIC_WINDOW_OPEN" -> "连接参数采集已开启。仅观察已导入手环的连接类型和协议版本，不记录消息内容或密钥。请在官方应用中重连。";
             case "PROTOCOL_CAPTURE_OPEN" -> "协议消息采集已开启，120 秒后关闭。请执行本次测试操作。";
