@@ -746,54 +746,66 @@ public final class OHealthDeviceHook {
             Log.i("OplusBandBridge", "OHEALTH_PANEL_FUNCTION_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
         }
+        Class<?> detailViewModel = null;
         try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsViewModel", loader,
-                    "initData", String.class, String.class, String.class, String.class,
-                    boolean.class, boolean.class, new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            applyPanelState(param.thisObject,
-                                    param.args.length > 2 ? param.args[2] : null,
-                                    param.args.length > 0 ? param.args[0] : null);
-                        }
-                    });
+            detailViewModel = DexAnchors.resolveClass(hostContext, loader,
+                    "com.heytap.health.linkage.ui.DeviceDetailsViewModel",
+                    "com.heytap.health.linkage.",
+                    String.class, String.class, String.class, String.class, boolean.class, boolean.class);
+            if (!"com.heytap.health.linkage.ui.DeviceDetailsViewModel".equals(detailViewModel.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_VM_ADAPTED " + detailViewModel.getName());
+            }
         } catch (Throwable failure) {
-            Log.i("OplusBandBridge", "OHEALTH_PANEL_INIT_UNAVAILABLE "
+            Log.i("OplusBandBridge", "OHEALTH_PANEL_VM_UNAVAILABLE "
                     + failure.getClass().getSimpleName());
         }
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsViewModel", loader,
-                    "getData", boolean.class, String.class, boolean.class, boolean.class,
-                    new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            Object mac = XposedHelpers.getObjectField(param.thisObject, "mMac");
-                            Object deviceId = XposedHelpers.getObjectField(param.thisObject, "mDeviceId");
-                            if (!ourBand(mac, deviceId)) return;
-                            applyPanelState(param.thisObject, mac, deviceId);
-                            XposedHelpers.setBooleanField(param.thisObject, "mShowNewFunctionItem", false);
-                            if (param.args.length > 3) param.args[3] = Boolean.FALSE;
-                        }
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            filterPanelButtons(param.thisObject);
-                        }
-                    });
-        } catch (Throwable failure) {
-            Log.i("OplusBandBridge", "OHEALTH_PANEL_DATA_UNAVAILABLE "
-                    + failure.getClass().getSimpleName());
+        if (detailViewModel != null) {
+            try {
+                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                        "initData", null, String.class, String.class, String.class, String.class,
+                        boolean.class, boolean.class), new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        applyPanelState(param.thisObject,
+                                param.args.length > 2 ? param.args[2] : null,
+                                param.args.length > 0 ? param.args[0] : null);
+                    }
+                });
+            } catch (Throwable failure) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_INIT_UNAVAILABLE "
+                        + failure.getClass().getSimpleName());
+            }
+            try {
+                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                        "getData", null, boolean.class, String.class, boolean.class, boolean.class),
+                        new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam param) {
+                        Object mac = XposedHelpers.getObjectField(param.thisObject, "mMac");
+                        Object deviceId = XposedHelpers.getObjectField(param.thisObject, "mDeviceId");
+                        if (!ourBand(mac, deviceId)) return;
+                        applyPanelState(param.thisObject, mac, deviceId);
+                        XposedHelpers.setBooleanField(param.thisObject, "mShowNewFunctionItem", false);
+                        if (param.args.length > 3) param.args[3] = Boolean.FALSE;
+                    }
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        filterPanelButtons(param.thisObject);
+                    }
+                });
+            } catch (Throwable failure) {
+                Log.i("OplusBandBridge", "OHEALTH_PANEL_DATA_UNAVAILABLE "
+                        + failure.getClass().getSimpleName());
+            }
+            try {
+                XposedBridge.hookMethod(DexAnchors.resolveMethod(detailViewModel,
+                        "reconnectDevice", null), new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!ourBand(XposedHelpers.getObjectField(param.thisObject, "mMac"),
+                                XposedHelpers.getObjectField(param.thisObject, "mDeviceId"))) return;
+                        param.setResult(null);
+                        requestSync();
+                    }
+                });
+            } catch (Throwable ignored) { }
         }
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.heytap.health.linkage.ui.DeviceDetailsViewModel", loader,
-                    "reconnectDevice", new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (!ourBand(XposedHelpers.getObjectField(param.thisObject, "mMac"),
-                                    XposedHelpers.getObjectField(param.thisObject, "mDeviceId"))) return;
-                            param.setResult(null);
-                            requestSync();
-                        }
-                    });
-        } catch (Throwable ignored) { }
         try {
             XposedHelpers.findAndHookMethod(
                     "com.heytap.health.linkage.ui.DeviceDetailsActivity", loader,
