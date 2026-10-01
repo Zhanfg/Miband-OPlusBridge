@@ -44,9 +44,17 @@ public final class EntryPoint extends XposedModule {
     }
 
     @Override public boolean onHotReloading(@NonNull HotReloadingParam param) {
-        try { MiFitnessOwnershipHook.detach(); } catch (Throwable ignored) {}
+        detachRuntimeResources();
         param.setSavedInstanceState(activePackage);
         return true;
+    }
+
+    private static void detachRuntimeResources() {
+        try { MiFitnessOwnershipHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthWeatherHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthHealthImportHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthFindPhoneHook.detach(); } catch (Throwable ignored) {}
+        try { OHealthMusicHook.detach(); } catch (Throwable ignored) {}
     }
 
     @Override public void onHotReloaded(@NonNull HotReloadedParam param) {
