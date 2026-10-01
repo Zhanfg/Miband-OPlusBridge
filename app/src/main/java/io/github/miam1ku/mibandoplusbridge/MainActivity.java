@@ -477,17 +477,60 @@ public final class MainActivity extends AppCompatActivity {
                 }
             }
             String visible = message;
+            boolean verifyProjection = registrationSaved && change == Change.ADD;
             main.post(() -> {
                 if (isDestroyed()) return;
                 changingOwnership = false;
                 ownershipStatus.setText(visible);
                 updateControls();
                 refreshDevice();
+                if (verifyProjection) completeProjectionHandshake();
                 if (profileAfterRestore && change == Change.RESTORE
                         && visible.startsWith("已恢复官方管理")) {
                     profileAfterRestore = false;
                     startProfileWindow();
                 }
+            });
+        });
+    }
+
+    private void completeProjectionHandshake() {
+        try {
+            getContentResolver().call(DeviceCardProvider.URI, "projectionRefresh", null, null);
+        } catch (RuntimeException ignored) { }
+        ownershipStatus.setText("设备已登记。正在启动 OHealth 完成设备投影…");
+        Intent health = getPackageManager().getLaunchIntentForPackage(HostIdentity.HEALTH_PACKAGE);
+        if (health != null) {
+            try { startActivity(health); }
+            catch (RuntimeException ignored) { }
+        }
+        main.postDelayed(this::refreshProjectionStatus, 1800);
+    }
+
+    private void refreshProjectionStatus() {
+        if (isDestroyed() || worker.isShutdown()) return;
+        worker.execute(() -> {
+            Bundle state = null;
+            try {
+                state = getContentResolver().call(DeviceCardProvider.URI,
+                        "projectionStatus", null, null);
+            } catch (RuntimeException ignored) { }
+            Bundle result = state;
+            main.post(() -> {
+                if (isDestroyed() || result == null) return;
+                boolean health = result.getBoolean("healthOnline", false);
+                boolean devices = result.getBoolean("devicesOnline", false);
+                String text;
+                if (health && devices) {
+                    text = "设备已登记；OHealth 与我的设备投影 Hook 均已在线。";
+                } else if (health) {
+                    text = "设备已登记；OHealth 投影 Hook 已在线，我的设备 Hook 尚未在线。";
+                } else if (devices) {
+                    text = "设备已登记；我的设备 Hook 已在线，OHealth 投影 Hook 尚未在线。";
+                } else {
+                    text = "设备已登记，但尚未检测到 OHealth / 我的设备投影 Hook。请确认 LSPosed 已勾选这两个应用。";
+                }
+                ownershipStatus.setText(text);
             });
         });
     }
