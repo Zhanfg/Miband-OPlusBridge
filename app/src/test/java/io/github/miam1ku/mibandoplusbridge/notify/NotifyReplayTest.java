@@ -48,6 +48,17 @@ public final class NotifyReplayTest {
         assertTrue(hold.poll(NotifyReplay.NOTIFICATION_MS).isEmpty());
     }
 
+    @Test public void nextExpiryTracksTheEarliestRealDeadline() {
+        NotifyReplay hold = new NotifyReplay();
+        assertEquals(-1, hold.nextExpiryDelay(0));
+        hold.add(BandNotificationCommand.post(
+                "com.example", "Example", "k", 1, "Hi", "one", WHEN, ZONE), 1_000);
+        assertEquals(NotifyReplay.NOTIFICATION_MS, hold.nextExpiryDelay(1_000));
+        hold.add(BandNotificationCommand.incomingCall("Ada", WHEN, ZONE), 5_000);
+        assertEquals(NotifyReplay.CALL_MS, hold.nextExpiryDelay(5_000));
+        assertEquals(1_000, hold.nextExpiryDelay(NotifyReplay.CALL_MS + 4_000));
+    }
+
     @Test public void endingAHeldCallDropsIt() {
         NotifyReplay hold = new NotifyReplay();
         CompletableFuture<Void> call = hold.add(BandNotificationCommand.incomingCall("Ada", WHEN, ZONE), 0);
