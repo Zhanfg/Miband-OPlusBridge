@@ -51,7 +51,12 @@ final class HookResolver {
     private static void noteAdaptation(String kind, String stable, String actual) {
         if (stable == null || actual == null || stable.equals(actual)) return;
         String item = kind + ":" + stable + "->" + actual;
-        if (ADAPTATIONS.add(item)) Log.i("OplusBandBridge", "DEX_ADAPTED " + item);
+        if (!ADAPTATIONS.add(item)) return;
+        try {
+            Log.i("OplusBandBridge", "DEX_ADAPTED " + item);
+        } catch (RuntimeException unavailableInJvmTests) {
+            // Diagnostics must never affect hook resolution or local JVM tests.
+        }
     }
 
     static Class<?> resolveClass(Context context, ClassLoader loader, String stableName,
