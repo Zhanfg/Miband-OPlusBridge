@@ -39,9 +39,6 @@ public final class OwnershipController {
                 && context.getSystemService(UserManager.class).isUserUnlocked();
     }
 
-    /** Kept source-compatible while the UI migrates away from the old KernelSU gate. */
-    @Deprecated public boolean probeRoot() { return true; }
-
     public synchronized void takeOver() throws Failure {
         GATE.writeLock().lock();
         try {
@@ -109,20 +106,5 @@ public final class OwnershipController {
         if (!context.getSystemService(UserManager.class).isUserUnlocked()) throw new Failure("USER_LOCKED");
     }
 
-    /** Legacy test helper only; no command is executed anywhere in the rootless runtime. */
-    static String rootStartCommand(String packageName, String className, boolean foreground) {
-        if (foreground && "io.github.miam1ku.mibandoplusbridge".equals(packageName)
-                && "io.github.miam1ku.mibandoplusbridge.service.BandLiveService".equals(className)) {
-            return "am start-foreground-service --user 0 -n " + packageName + "/" + className;
-        }
-        if (!foreground && "com.heytap.health".equals(packageName)
-                && "com.heytap.health.rpc.host.HealthRpcMsgService".equals(className)) {
-            return "am start-service --user 0 -n " + packageName + "/" + className;
-        }
-        return null;
-    }
 
-    static boolean rootStart(String packageName, String className, boolean foreground) {
-        return false;
-    }
 }
