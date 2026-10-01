@@ -21,6 +21,7 @@ public final class OHealthMusicHook {
     private static final String MANAGER = "com.heytap.health.watch.music.control.MusicControlManager";
     private static Context app;
     private static BroadcastReceiver receiver;
+    private static Class<?> managerClass;
     private static int lastState = Integer.MIN_VALUE;
     private static int lastVolume = Integer.MIN_VALUE;
     private static int lastDuration = Integer.MIN_VALUE;
@@ -38,7 +39,14 @@ public final class OHealthMusicHook {
         trace("MUSIC_HOOK process=" + process);
         Class<?> presenter;
         try {
-            presenter = XposedHelpers.findClass(PRESENTER, loader);
+            presenter = HookResolver.resolveClassByMembers(app, loader, PRESENTER,
+                    "com.heytap.health.watch.music.", null,
+                    new String[]{"sendPlayInfo", "sendPlayState", "sendTotalInfo",
+                            "sendVolumeInfo", "sendMusicCloseInfo", "responseTotalInfo"},
+                    new String[0], true);
+            if (!PRESENTER.equals(presenter.getName())) {
+                trace("MUSIC_HOOK presenter-adapted=" + presenter.getName());
+            }
         } catch (Throwable failure) {
             android.util.Log.i("OplusBandBridge", "MUSIC native unavailable");
             trace("MUSIC_HOOK presenter-missing");
@@ -66,16 +74,25 @@ public final class OHealthMusicHook {
         app.registerReceiver(receiver, new IntentFilter(NativeMusic.ACTION),
                 FindPhone.PERMISSION, null, Context.RECEIVER_EXPORTED);
         try {
-            Class<?> service = XposedHelpers.findClass(
-                    "com.heytap.health.watch.music.control.MusicService", loader);
-            XposedBridge.hookAllMethods(service, "handleNoControllers", new XC_MethodHook() {
+            Class<?> service = HookResolver.resolveClassByMembers(app, loader,
+                    "com.heytap.health.watch.music.control.MusicService",
+                    "com.heytap.health.watch.music.", null,
+                    new String[]{"handleNoControllers"}, new String[0]);
+            XposedBridge.hookMethod(HookResolver.resolveMethod(service,
+                    "handleNoControllers", null), new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     publish(true, 0, Math.max(0, lastVolume), "", "", 0, 0);
                 }
             });
             // The manager's static block is what registers the media-session listener.
             // Nothing else loads it until an OPPO watch message arrives.
-            XposedHelpers.getStaticObjectField(XposedHelpers.findClass(MANAGER, loader), "INSTANCE");
+            managerClass = HookResolver.resolveClassByMembers(app, loader, MANAGER,
+                    "com.heytap.health.watch.music.", null,
+                    new String[0], new String[]{"INSTANCE", "mListener"});
+            XposedHelpers.getStaticObjectField(managerClass, "INSTANCE");
+            if (!MANAGER.equals(managerClass.getName())) {
+                trace("MUSIC_HOOK manager-adapted=" + managerClass.getName());
+            }
         } catch (Throwable failure) {
             android.util.Log.i("OplusBandBridge", "MUSIC native unavailable");
             trace("MUSIC_HOOK manager-missing " + failure.getClass().getSimpleName());
@@ -87,6 +104,7 @@ public final class OHealthMusicHook {
         BroadcastReceiver current = receiver;
         receiver = null;
         app = null;
+        managerClass = null;
         if (context != null && current != null) {
             try { context.unregisterReceiver(current); } catch (RuntimeException ignored) {}
         }
@@ -210,7 +228,7 @@ public final class OHealthMusicHook {
 
     private static Object listener(ClassLoader loader) {
         try {
-            Class<?> manager = XposedHelpers.findClass(MANAGER, loader);
+            Class<?> manager = managerClass != null ? managerClass : XposedHelpers.findClass(MANAGER, loader);
             return XposedHelpers.getStaticObjectField(manager, "mListener");
         } catch (Throwable failure) {
             return null;
