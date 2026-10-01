@@ -3,96 +3,219 @@ package io.github.miam1ku.mibandoplusbridge.hook;
 
 import android.app.Application;
 import android.content.Context;
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import android.util.Log;
+import android.util.Pair;
+import androidx.annotation.NonNull;
+import io.github.libxposed.api.XposedModule;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
+import java.lang.reflect.Executable;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-public final class EntryPoint implements IXposedHookLoadPackage {
+/**
+ * Single modern libxposed API 102 entry.
+ *
+ * Hook IDs are stable per executable/ordinal, which lets API 102 atomically
+ * replace them during hot reload and then detach handles that disappeared.
+ */
+public final class EntryPoint extends XposedModule {
+    private static final String TAG = "OplusBandBridge";
+    private static volatile EntryPoint current;
     private static final AtomicBoolean installed = new AtomicBoolean();
     private static final AtomicBoolean healthInstalled = new AtomicBoolean();
 
-    @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam load) {
-        if ("com.coloros.alarmclock".equals(load.packageName)) {
-            XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam param) {
-                    Context context = (Context) param.args[0];
-                    if (context == null) return;
-                    Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
+    private final ConcurrentHashMap<String, AtomicInteger> hookOrdinals = new ConcurrentHashMap<>();
+    private final Set<String> hookedIds = ConcurrentHashMap.newKeySet();
+    private Pair<String, ClassLoader> activePackage;
+
+    @Override public void onModuleLoaded(@NonNull ModuleLoadedParam param) {
+        current = this;
+    }
+
+    @Override public void onPackageReady(@NonNull PackageReadyParam param) {
+        if (!param.isFirstPackage()) return;
+        String packageName = param.getPackageName();
+        ClassLoader loader = param.getClassLoader();
+        activePackage = Pair.create(packageName, loader);
+        beginInstall();
+        installPackage(packageName, loader, false);
+    }
+
+    @Override public boolean onHotReloading(@NonNull HotReloadingParam param) {
+        param.setSavedInstanceState(activePackage);
+        return true;
+    }
+
+    @Override public void onHotReloaded(@NonNull HotReloadedParam param) {
+        current = this;
+        Object saved = param.getSavedInstanceState();
+        if (saved instanceof Pair<?, ?> pair
+                && pair.first instanceof String packageName
+                && pair.second instanceof ClassLoader loader) {
+            activePackage = Pair.create(packageName, loader);
+            beginInstall();
+            installPackage(packageName, loader, true);
+        }
+        param.getOldHookHandles().forEach(handle -> {
+            String id = handle.getId();
+            if (id == null || !hookedIds.contains(id)) handle.unhook();
+        });
+    }
+
+    private void beginInstall() {
+        hookOrdinals.clear();
+        hookedIds.clear();
+        // New module classloader has fresh static guards; make the intent explicit.
+        installed.set(false);
+        healthInstalled.set(false);
+    }
+
+    static void installHook(Executable executable, XC_MethodHook callback) {
+        EntryPoint module = current;
+        if (module == null) throw new IllegalStateException("LSP_MODULE_NOT_ATTACHED");
+        executable.setAccessible(true);
+        String base = executable.toGenericString();
+        int ordinal = module.hookOrdinals.computeIfAbsent(base, ignored -> new AtomicInteger()).getAndIncrement();
+        String id = base + "#" + ordinal;
+        var builder = module.hook(executable);
+        if (module.getApiVersion() >= 102) {
+            builder.setId(id);
+            module.hookedIds.add(id);
+        }
+        builder.intercept(chain -> XposedBridge.dispatch(executable, callback, chain));
+    }
+
+    static void logModern(int priority, String text, Throwable error) {
+        EntryPoint module = current;
+        if (module == null) return;
+        try {
+            module.log(priority, TAG, text == null ? "" : text, error);
+        } catch (Throwable ignored) {
+            // Android log is already emitted by callers.
+        }
+    }
+
+    private void installPackage(String packageName, ClassLoader loader, boolean hotReload) {
+        try {
+            if ("com.coloros.alarmclock".equals(packageName)) {
+                if (hotReload) {
+                    Context context = currentApplication();
+                    if (context != null) ClockAlarmHook.install(context, loader);
+                } else {
+                    hookAttach(loader, (context) -> ClockAlarmHook.install(context, loader));
+                }
+                return;
+            }
+            if (!HostIdentity.MI_PACKAGE.equals(packageName)
+                    && !"com.heytap.mydevices".equals(packageName)
+                    && !"com.heytap.health".equals(packageName)) return;
+
+            if ("com.heytap.health".equals(packageName)) {
+                Log.i(TAG, "OHEALTH_PACKAGE_LOADED process=" + Application.getProcessName());
+                OHealthLoginDebug.install(loader);
+                if (hotReload) {
+                    Context context = currentApplication();
+                    if (context != null) installHealth(context, loader);
+                } else {
                     try {
-                        ClockAlarmHook.install(app, load.classLoader);
-                    } catch (Throwable failure) {
-                        android.util.Log.i("OplusBandBridge", "CLOCK_ALARM_HOOK_SKIPPED "
-                                + failure.getClass().getSimpleName());
+                        XposedHelpers.findAndHookMethod("com.heytap.health.SportHealthApplication", loader,
+                                "onCreate", new XC_MethodHook() {
+                                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                                        if (param.hasThrowable()) return;
+                                        installHealth((Context) param.thisObject, loader);
+                                    }
+                                });
+                    } catch (Throwable ignored) {
+                        // Application.attach fallback below remains authoritative.
                     }
+                    hookAttach(loader, (context) -> installHealth(context, loader));
                 }
-            });
-            return;
+                return;
+            }
+
+            if (hotReload) {
+                Context context = currentApplication();
+                if (context != null) installNonHealth(packageName, context, loader);
+            } else {
+                hookAttach(loader, (context) -> installNonHealth(packageName, context, loader));
+            }
+        } catch (Throwable failure) {
+            Log.e(TAG, "LSP102_INSTALL_FAILED pkg=" + packageName, failure);
+            logModern(Log.ERROR, "install failed for " + packageName, failure);
         }
-        if (!HostIdentity.MI_PACKAGE.equals(load.packageName)
-                && !"com.heytap.mydevices".equals(load.packageName)
-                && !"com.heytap.health".equals(load.packageName)) return;
-        if ("com.heytap.health".equals(load.packageName)) {
-            android.util.Log.i("OplusBandBridge", "OHEALTH_PACKAGE_LOADED process=" + load.processName);
-            de.robv.android.xposed.XposedBridge.log("OplusBandBridge OHEALTH_PACKAGE_LOADED process="
-                    + load.processName);
-            OHealthLoginDebug.install(load.classLoader);
-            XposedHelpers.findAndHookMethod("com.heytap.health.SportHealthApplication", load.classLoader,
-                    "onCreate", new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            if (param.hasThrowable()) return;
-                            installHealth((Context) param.thisObject, load.classLoader);
-                        }
-                    });
-            XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam param) {
-                    Context context = (Context) param.args[0];
-                    if (context != null) installHealth(context.getApplicationContext() == null
-                            ? context : context.getApplicationContext(), load.classLoader);
-                }
-            });
-            return;
-        }
+    }
+
+    private static void hookAttach(ClassLoader loader, ThrowingContextAction action) {
         XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
-                if (!installed.compareAndSet(false, true)) return;
                 Context context = (Context) param.args[0];
-                if ("com.heytap.mydevices".equals(load.packageName)) {
-                    try {
-                        MyDevicesHook.install(context, load.classLoader);
-                        android.util.Log.i("OplusBandBridge", "DEVICE_CARD_HOOK_INSTALLED");
-                    } catch (Throwable skipped) {
-                        android.util.Log.i("OplusBandBridge", "DEVICE_CARD_HOOK_SKIPPED "
-                                + skipped.getClass().getSimpleName()
-                                + (skipped.getMessage() == null ? "" : " " + skipped.getMessage()));
-                    }
-                    return;
-                }
-                if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
-                    android.util.Log.i("OplusBandBridge", "MI_PACKAGE_ABSENT");
-                    return;
-                }
+                if (context == null) return;
+                Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
                 try {
-                    MiFitnessImportHook.install(context, load.classLoader);
-                    android.util.Log.i("OplusBandBridge", "OplusBandBridge: IMPORT_HOOK_INSTALLED");
-                } catch (Throwable incompatible) {
-                    android.util.Log.i("OplusBandBridge", "OplusBandBridge: HOST_VERSION_UNSUPPORTED");
-                }
-                try {
-                    TransportProbeHook.install(context, load.classLoader);
-                } catch (Throwable incompatible) {
-                    android.util.Log.i("OplusBandBridge", "TRANSPORT_PROBE_UNAVAILABLE");
-                }
-                try {
-                    ProtocolCaptureHook.install(context, load.classLoader);
-                } catch (Throwable incompatible) {
-                    android.util.Log.i("OplusBandBridge", "PROTOCOL_CAPTURE_UNAVAILABLE");
+                    action.run(app);
+                } catch (Throwable failure) {
+                    Log.e(TAG, "APPLICATION_ATTACH_INSTALL_FAILED", failure);
                 }
             }
         });
+    }
+
+    private static void installNonHealth(String packageName, Context context, ClassLoader loader) {
+        if (!installed.compareAndSet(false, true)) return;
+        if ("com.heytap.mydevices".equals(packageName)) {
+            try {
+                MyDevicesHook.install(context, loader);
+                Log.i(TAG, "DEVICE_CARD_HOOK_INSTALLED");
+            } catch (Throwable skipped) {
+                Log.i(TAG, "DEVICE_CARD_HOOK_SKIPPED " + skipped.getClass().getSimpleName()
+                        + (skipped.getMessage() == null ? "" : " " + skipped.getMessage()));
+            }
+            return;
+        }
+        if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
+            Log.i(TAG, "MI_PACKAGE_ABSENT");
+            return;
+        }
+        try {
+            MiFitnessOwnershipHook.install(context, loader);
+            Log.i(TAG, "MI_OWNERSHIP_HOOK_INSTALLED");
+        } catch (Throwable incompatible) {
+            Log.i(TAG, "MI_OWNERSHIP_HOOK_UNAVAILABLE " + incompatible.getClass().getSimpleName());
+        }
+        try {
+            MiFitnessImportHook.install(context, loader);
+            Log.i(TAG, "IMPORT_HOOK_INSTALLED");
+        } catch (Throwable incompatible) {
+            Log.i(TAG, "HOST_VERSION_UNSUPPORTED");
+        }
+        try {
+            TransportProbeHook.install(context, loader);
+        } catch (Throwable incompatible) {
+            Log.i(TAG, "TRANSPORT_PROBE_UNAVAILABLE");
+        }
+        try {
+            ProtocolCaptureHook.install(context, loader);
+        } catch (Throwable incompatible) {
+            Log.i(TAG, "PROTOCOL_CAPTURE_UNAVAILABLE");
+        }
+    }
+
+    private static Context currentApplication() {
+        try {
+            Object app = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null), "currentApplication");
+            if (app instanceof Context context) {
+                return context.getApplicationContext() == null ? context : context.getApplicationContext();
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingContextAction {
+        void run(Context context) throws Throwable;
     }
 
     private static void installHealth(Context context, ClassLoader loader) {
