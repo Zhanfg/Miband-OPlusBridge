@@ -80,7 +80,7 @@ public final class MiHealthMirrorHook {
         XC_MethodHook syncGate = new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam param) {
                 if (param.args.length == 0 || !(param.args[0] instanceof String did)) return;
-                if (gate.isTargetDid(did)) gate.markTargetSync(did);
+                gate.noteSync(did);
             }
         };
         XposedBridge.hookMethod(contactClass.getMethod("syncData", String.class, boolean.class), syncGate);
@@ -99,13 +99,40 @@ public final class MiHealthMirrorHook {
             }
         });
         Log.i(TAG, "MI_HEALTH_MIRROR_READY " + utils.getName());
+        try {
+            Bundle state = context.getContentResolver().call(OwnershipProvider.URI, "state", null, null);
+            if (state != null && state.getBoolean("coexist", false)) {
+                requestBackfill(state.getLong("generation", 0));
+            }
+        } catch (RuntimeException ignored) { }
+    }
+
+    public static void requestBackfill(long generation) {
+        if (generation < 0 || generation <= lastBackfillGeneration) return;
+        Backfill currentBackfill = backfill;
+        DeviceGate gate = deviceGate;
+        if (currentBackfill == null || gate == null) return;
+        synchronized (MiHealthMirrorHook.class) {
+            if (generation <= lastBackfillGeneration) return;
+            lastBackfillGeneration = generation;
+        }
+        Thread thread = new Thread(() -> currentBackfill.run(gate, generation),
+                "OplusMiHealthBackfill");
+        thread.setDaemon(true);
+        thread.setPriority(Thread.MIN_PRIORITY);
+        thread.start();
     }
 
     public static synchronized void detach() {
         ThreadPoolExecutor current = writer;
         writer = null;
         backfill = null;
+        deviceGate = null;
         lastBackfillGeneration = -1;
+        synchronized (SID_LOCK) {
+            targetSids.clear();
+            targetSyncUntilElapsed = 0;
+        }
         if (current != null) current.shutdownNow();
     }
 
