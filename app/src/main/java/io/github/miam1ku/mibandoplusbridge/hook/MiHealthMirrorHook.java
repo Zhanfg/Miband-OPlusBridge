@@ -6,8 +6,11 @@ import android.os.Bundle;
 import android.util.Log;
 import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
 import java.lang.reflect.Method;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +22,10 @@ import java.util.concurrent.TimeUnit;
 public final class MiHealthMirrorHook {
     private static final String TAG = "OplusBandBridge";
     private static final int BATCH = 64;
+    private static final long BACKFILL_WINDOW_SECONDS = 48L * 60L * 60L;
     private static volatile ThreadPoolExecutor writer;
+    private static volatile Backfill backfill;
+    private static volatile long lastBackfillGeneration = -1;
 
     private MiHealthMirrorHook() {}
 
