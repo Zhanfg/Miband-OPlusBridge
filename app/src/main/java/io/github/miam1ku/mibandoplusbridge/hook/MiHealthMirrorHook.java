@@ -209,7 +209,7 @@ public final class MiHealthMirrorHook {
         }
         Object zone = safeCall(model, "getZoneName");
         String timezone = zone instanceof String text ? text : "";
-        String sourceKey = persistKey + "|" + sid + "|" + timestamp + "|" + item.getClass().getName();
+        String sourceKey = persistKey + "|" + timestamp + "|" + item.getClass().getName();
         return new Row(sourceKey, kind, startMs, startMs + 60_000L,
                 value, distance, calories, -1, false, timezone);
     }
@@ -236,7 +236,7 @@ public final class MiHealthMirrorHook {
             }
         }
 
-        String base = persistKey + "|" + sid + "|" + item.getClass().getName() + "|" + bed;
+        String base = persistKey + "|" + item.getClass().getName() + "|" + bed;
         rows.add(new Row(base + "|session", "sleep_interval", bed, wake,
                 0, -1, -1, -1, complete, timezone));
 
@@ -329,6 +329,229 @@ public final class MiHealthMirrorHook {
 
     private static long toMillis(long time) {
         return time > 0 && time < 10_000_000_000L ? time * 1000L : time;
+    }
+
+    private static final class DeviceGate {
+        private static final long TARGET_SYNC_WINDOW_MS = 180_000L;
+        private static final long PHONE_SID_CACHE_MS = 60_000L;
+        private final Context context;
+        private final Object manager;
+        private final Object contact;
+        private final Set<String> phoneSids = new HashSet<>();
+        private String cachedTargetMac = "";
+        private String cachedTargetDid = "";
+        private long phoneSidRefreshedAt;
+
+        DeviceGate(Context context, Object manager, Object contact) {
+            this.context = context;
+            this.manager = manager;
+            this.contact = contact;
+        }
+
+        void noteSync(String did) {
+            if (did == null || did.isBlank()) return;
+            boolean target = isTargetDid(did);
+            synchronized (SID_LOCK) {
+                if (target) {
+                    targetSyncUntilElapsed = SystemClock.elapsedRealtime() + TARGET_SYNC_WINDOW_MS;
+                } else {
+                    targetSyncUntilElapsed = 0;
+                }
+            }
+        }
+
+        boolean acceptSid(String sid) {
+            if (sid == null || sid.isBlank() || phoneSid(sid)) return false;
+            synchronized (SID_LOCK) {
+                if (targetSids.contains(sid)) return true;
+                if (SystemClock.elapsedRealtime() <= targetSyncUntilElapsed
+                        && !cachedTargetDid.isBlank()) {
+                    targetSids.add(sid);
+                    Log.i(TAG, "MI_HEALTH_TARGET_SID_LEARNED");
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        boolean isTargetDid(String did) {
+            String target = resolveTargetDid();
+            return !target.isBlank() && target.equals(did);
+        }
+
+        boolean triggerTargetSync() {
+            String did = resolveTargetDid();
+            if (did.isBlank()) return false;
+            try {
+                Object idle = safeCall(contact, "isIDLE");
+                if (idle instanceof Boolean ready && !ready) return false;
+                noteSync(did);
+                XposedHelpers.callMethod(contact, "syncData", did, true);
+                return true;
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        }
+
+        List<String> targetSids() {
+            synchronized (SID_LOCK) {
+                return List.copyOf(targetSids);
+            }
+        }
+
+        private synchronized String resolveTargetDid() {
+            String mac = targetMac();
+            if (mac.isBlank()) return "";
+            if (!mac.equals(cachedTargetMac)) {
+                cachedTargetMac = mac;
+                cachedTargetDid = "";
+                synchronized (SID_LOCK) {
+                    targetSids.clear();
+                    targetSyncUntilElapsed = 0;
+                }
+            }
+            if (!cachedTargetDid.isBlank()) return cachedTargetDid;
+            Object all = safeCall(manager, "getAllDeviceList");
+            if (!(all instanceof List<?> devices)) return "";
+            for (Object device : devices) {
+                if (device == null || !mac.equals(deviceMac(device))) continue;
+                Object did = safeCall(device, "getDid");
+                if (did instanceof String value && !value.isBlank()) {
+                    cachedTargetDid = value;
+                    return value;
+                }
+            }
+            return "";
+        }
+
+        private String targetMac() {
+            try {
+                Bundle state = context.getContentResolver().call(
+                        OwnershipProvider.URI, "state", null, null);
+                return state == null ? "" : normalizeMac(state.getString("mac", ""));
+            } catch (RuntimeException unavailable) {
+                return cachedTargetMac;
+            }
+        }
+
+        private String deviceMac(Object device) {
+            for (Object candidate : new Object[]{device, safeCall(device, "getDeviceInfo")}) {
+                if (candidate == null) continue;
+                for (String getter : new String[]{"getAddress", "getMac", "getMacAddress"}) {
+                    Object value = safeCall(candidate, getter);
+                    if (value instanceof String text) {
+                        String normalized = normalizeMac(text);
+                        if (!normalized.isBlank()) return normalized;
+                    }
+                }
+            }
+            return "";
+        }
+
+        private boolean phoneSid(String sid) {
+            long now = SystemClock.elapsedRealtime();
+            synchronized (this) {
+                if (now - phoneSidRefreshedAt >= PHONE_SID_CACHE_MS || phoneSidRefreshedAt == 0) {
+                    phoneSids.clear();
+                    for (String getter : new String[]{"getLocalPhoneSid", "getCurrentPhoneSid"}) {
+                        Object value = safeCall(manager, getter);
+                        if (value instanceof String text && !text.isBlank()) phoneSids.add(text);
+                    }
+                    phoneSidRefreshedAt = now;
+                }
+                return phoneSids.contains(sid);
+            }
+        }
+
+        private static String normalizeMac(String value) {
+            if (value == null) return "";
+            String normalized = value.replaceAll("[^0-9A-Fa-f]", "").toUpperCase(java.util.Locale.ROOT);
+            return normalized.length() == 12 ? normalized : "";
+        }
+    }
+
+    private static final class Backfill {
+        private static final int MAX_ROWS = 12_000;
+        private final Object utils;
+        private final Method getAll;
+        private final Class<?> homeType;
+
+        Backfill(Object utils, Method getAll, Class<?> homeType) {
+            this.utils = utils;
+            this.getAll = getAll;
+            this.homeType = homeType;
+        }
+
+        void run(DeviceGate gate, long generation) {
+            try {
+                gate.triggerTargetSync();
+                long waitUntil = SystemClock.elapsedRealtime() + 4_000L;
+                while (gate.targetSids().isEmpty() && SystemClock.elapsedRealtime() < waitUntil) {
+                    try {
+                        Thread.sleep(100L);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                List<String> sids = gate.targetSids();
+                if (sids.isEmpty()) {
+                    Log.i(TAG, "MI_HEALTH_BACKFILL_WAITING_FOR_TARGET_SID gen=" + generation);
+                    return;
+                }
+
+                long end = Instant.now().getEpochSecond() + 60L;
+                long start = Math.max(0L, end - BACKFILL_WINDOW_SECONDS);
+                int zoneOffset = ZoneId.systemDefault().getRules()
+                        .getOffset(Instant.now()).getTotalSeconds();
+                int total = 0;
+                for (String sid : sids) {
+                    for (String[] metric : new String[][]{
+                            {"STEP", "steps"}, {"HR", "hr"}, {"SPO2", "spo2"},
+                            {"STRESS", "stress"}, {"SLEEP", "sleep"}}) {
+                        Object type = homeType.getField(metric[0]).get(null);
+                        Object result = getAll.invoke(utils, type, sid, start, end, zoneOffset);
+                        ArrayList<Row> rows = new ArrayList<>();
+                        collect(metric[1], sid, result, rows, MAX_ROWS - total);
+                        if (!rows.isEmpty()) {
+                            pushRows(gate.context, rows);
+                            total += rows.size();
+                            if (total >= MAX_ROWS) break;
+                        }
+                    }
+                    if (total >= MAX_ROWS) break;
+                }
+                Log.i(TAG, "MI_HEALTH_BACKFILL_DONE gen=" + generation + " rows=" + total);
+            } catch (Throwable failure) {
+                Log.i(TAG, "MI_HEALTH_BACKFILL_FAILED " + failure.getClass().getSimpleName());
+            }
+        }
+
+        private static void collect(String persistKey, String sid, Object value,
+                List<Row> rows, int remaining) {
+            if (value == null || remaining <= 0 || rows.size() >= remaining) return;
+            if (value instanceof Map<?, ?> map) {
+                for (Object item : map.values()) {
+                    collect(persistKey, sid, item, rows, remaining);
+                    if (rows.size() >= remaining) return;
+                }
+                return;
+            }
+            if (value instanceof Iterable<?> iterable) {
+                for (Object item : iterable) {
+                    collect(persistKey, sid, item, rows, remaining);
+                    if (rows.size() >= remaining) return;
+                }
+                return;
+            }
+            String simple = value.getClass().getSimpleName();
+            if ("DayNightSleepReport".equals(simple) || "SleepSegmentReport".equals(simple)) {
+                appendSleepRows(persistKey, sid, value, value, rows);
+                return;
+            }
+            Row row = row(persistKey, sid, value, value);
+            if (row != null) rows.add(row);
+        }
     }
 
     private record Row(String sourceKey, String kind, long startMs, long endMs,
