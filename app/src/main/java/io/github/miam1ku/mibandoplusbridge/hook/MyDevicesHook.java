@@ -304,8 +304,12 @@ public final class MyDevicesHook {
         }
         for (String apk : apks) {
             try {
-                for (String name : DexAnchors.classNames(apk)) {
-                    if (!name.startsWith("aa.") || name.indexOf('$') >= 0 || name.length() > 6) continue;
+                for (String name : HookResolver.classNames(apk)) {
+                    if (name.indexOf(36) >= 0) continue;
+                    boolean shortObfuscated = name.startsWith("aa.") && name.length() <= 8;
+                    boolean vendorNamespace = name.startsWith("com.oplus.mydevices.")
+                            || name.startsWith("com.heytap.mydevices.");
+                    if (!shortObfuscated && !vendorNamespace) continue;
                     Class<?> type;
                     try {
                         type = Class.forName(name, false, loader);
