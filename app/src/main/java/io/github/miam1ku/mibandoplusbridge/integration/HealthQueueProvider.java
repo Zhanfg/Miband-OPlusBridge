@@ -242,6 +242,15 @@ public final class HealthQueueProvider extends ContentProvider {
         }
     }
 
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new IllegalStateException("HEALTH_MIRROR_HASH_UNAVAILABLE", impossible);
+        }
+    }
+
     private void notifyRecordsChanged() {
         getContext().getContentResolver().notifyChange(URI, null);
         getContext().getContentResolver().notifyChange(RECORDS_URI, null);
