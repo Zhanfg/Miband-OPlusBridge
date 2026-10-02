@@ -48,14 +48,14 @@ public final class SetupProgressTest {
         assertEquals("添加到健康", progress.primaryLabel());
     }
 
-    @Test public void registeredWithoutAccountIsDone() {
+    @Test public void registeredCoexistWithoutAccountIsDone() {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, false);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
         assertEquals("同步到 OHealth", progress.primaryLabel());
     }
 
-    @Test public void confirmedAccountHidesChecklist() {
+    @Test public void confirmedAccountHidesChecklistInCoexist() {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, true);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
