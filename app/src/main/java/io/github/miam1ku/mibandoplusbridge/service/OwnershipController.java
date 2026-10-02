@@ -70,7 +70,10 @@ public final class OwnershipController {
             if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
                 throw new Failure("HOST_VERSION_UNSUPPORTED");
             }
-            if (coexistReady()) return;
+            if (coexistReady()) {
+                io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
+                return;
+            }
             long generation = state.getLong("generation", 0) + 1;
             if (!state.edit()
                     .putBoolean("transitionPending", true)
@@ -91,6 +94,7 @@ public final class OwnershipController {
                 rollbackToOfficial(generation);
                 throw new Failure("OWNERSHIP_STORAGE_FAILED");
             }
+            io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
         } finally {
             GATE.writeLock().unlock();
         }
