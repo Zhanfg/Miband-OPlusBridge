@@ -45,6 +45,10 @@ public final class CoexistEventRouter {
             }
 
             if (type == 2) {
+                if (subtype == 78 || subtype == 79) {
+                    CoexistControlPlane.onSleepCommand(context, command);
+                    return;
+                }
                 if (subtype == 17) {
                     FindPhone.onBandCommand(context, command);
                     return;
