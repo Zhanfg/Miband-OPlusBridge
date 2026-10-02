@@ -36,6 +36,7 @@ public final class BandNotificationListener extends NotificationListenerService 
     private static volatile BandNotificationListener instance;
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile boolean listenerConnected;
+    private volatile boolean destroyed;
     private NotificationRelay relay;
     private SharedPreferences settings;
     private ScheduledThreadPoolExecutor coexistCallExecutor;
@@ -102,6 +103,7 @@ public final class BandNotificationListener extends NotificationListenerService 
 
     @Override public void onCreate() {
         super.onCreate();
+        destroyed = false;
         settings = getSharedPreferences(SETTINGS, MODE_PRIVATE);
         relay = new NotificationRelay(command -> CoexistProtoRelay.send(this, command),
                 () -> CoexistProtoRelay.payloadLimit(this), main::post);
@@ -226,7 +228,7 @@ public final class BandNotificationListener extends NotificationListenerService 
 
 
     private void refreshCoexistCalls() {
-        if (isDestroyed()) return;
+        if (destroyed) return;
         boolean coexist = new OwnershipController(this).coexistReady();
         if (!coexist) {
             closeCoexistCalls();
@@ -271,7 +273,7 @@ public final class BandNotificationListener extends NotificationListenerService 
         if (calls != null) calls.close();
         ScheduledThreadPoolExecutor executor = coexistCallExecutor;
         coexistCallExecutor = null;
-        if (executor != null) executor.shutdownNow();
+        if (executor != null) executor.shutdown();
     }
 
     private void skip(String reason, String pkg) {
@@ -378,6 +380,7 @@ public final class BandNotificationListener extends NotificationListenerService 
     }
 
     @Override public void onDestroy() {
+        destroyed = true;
         if (instance == this) instance = null;
         listenerConnected = false;
         relay.disconnected();
