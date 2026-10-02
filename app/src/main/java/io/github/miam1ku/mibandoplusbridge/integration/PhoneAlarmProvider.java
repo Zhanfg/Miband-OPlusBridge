@@ -57,7 +57,7 @@ public final class PhoneAlarmProvider extends ContentProvider {
             if (io.github.miam1ku.mibandoplusbridge.notify.PhoneAlarmNotice.claim(op)) {
                 io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(getContext(),
                         "ALARM_PHONE op=" + op + " id=" + id);
-                BandLiveService.sendSessionCommand(BandAlarmCommand.operation(op, id, alertTimeSec, label));
+                CoexistProtoRelay.send(getContext(), BandAlarmCommand.operation(op, id, alertTimeSec, label));
             }
             Bundle result = new Bundle();
             result.putString("status", "QUEUED");
