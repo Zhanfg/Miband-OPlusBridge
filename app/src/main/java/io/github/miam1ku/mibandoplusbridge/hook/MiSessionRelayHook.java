@@ -72,10 +72,8 @@ public final class MiSessionRelayHook {
         });
         XposedBridge.hookMethod(isAuthConnected, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
-                if (Boolean.TRUE.equals(param.getResult())) {
-                    remember(param.thisObject);
-                    handler.post(() -> refreshOnline(app));
-                }
+                if (Boolean.TRUE.equals(param.getResult())) remember(param.thisObject);
+                handler.post(() -> refreshOnline(app));
             }
         });
         XposedBridge.hookMethod(handleData, new XC_MethodHook() {
@@ -159,7 +157,17 @@ public final class MiSessionRelayHook {
 
     private static void refreshOnline(Context context) {
         Object api = activeApi();
-        if (api == null) return;
+        if (api == null) {
+            String selected = MiFitnessOwnershipHook.selectedAddress();
+            if (selected.isBlank()) return;
+            try {
+                Bundle offline = new Bundle();
+                offline.putString("address", selected);
+                context.getContentResolver().call(
+                        CoexistRelayProvider.URI, "offline", null, offline);
+            } catch (RuntimeException ignored) { }
+            return;
+        }
         try {
             Object info = XposedHelpers.callMethod(api, "getDeviceInfo");
             String address = String.valueOf(XposedHelpers.callMethod(info, "getAddress"));
