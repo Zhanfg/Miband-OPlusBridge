@@ -14,6 +14,7 @@ import android.os.Process;
 import android.os.SystemClock;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistControlPlane;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistEventRouter;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import io.github.miam1ku.mibandoplusbridge.notify.PhoneDnd;
@@ -135,7 +136,10 @@ public final class CoexistRelayProvider extends ContentProvider {
         }
         Bundle out = relayStatus();
         getContext().getContentResolver().notifyChange(URI, null);
-        if (out.getBoolean("online", false)) syncDnd();
+        if (out.getBoolean("online", false)) {
+            syncDnd();
+            CoexistControlPlane.relayOnline(getContext());
+        }
         return out;
     }
 
