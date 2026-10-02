@@ -54,6 +54,7 @@ public final class EntryPoint extends XposedModule {
         try { MiFitnessOwnershipHook.detach(); } catch (Throwable ignored) {}
         try { MiFitnessImportHook.detach(); } catch (Throwable ignored) {}
         try { MiHealthMirrorHook.detach(); } catch (Throwable ignored) {}
+        try { MiSessionRelayHook.detach(); } catch (Throwable ignored) {}
         try { MyDevicesHook.detach(); } catch (Throwable ignored) {}
         try { OHealthWeatherHook.detach(); } catch (Throwable ignored) {}
         try { OHealthHealthImportHook.detach(); } catch (Throwable ignored) {}
@@ -200,6 +201,12 @@ public final class EntryPoint extends XposedModule {
             Log.i(TAG, "MI_HEALTH_MIRROR_INSTALLED");
         } catch (Throwable incompatible) {
             Log.i(TAG, "MI_HEALTH_MIRROR_UNAVAILABLE " + incompatible.getClass().getSimpleName());
+        }
+        try {
+            MiSessionRelayHook.install(context, loader);
+            Log.i(TAG, "MI_SESSION_RELAY_INSTALLED");
+        } catch (Throwable incompatible) {
+            Log.i(TAG, "MI_SESSION_RELAY_UNAVAILABLE " + incompatible.getClass().getSimpleName());
         }
         try {
             TransportProbeHook.install(context, loader);
