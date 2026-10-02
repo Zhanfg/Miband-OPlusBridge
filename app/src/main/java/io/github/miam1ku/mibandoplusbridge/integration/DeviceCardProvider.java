@@ -187,11 +187,16 @@ public final class DeviceCardProvider extends ContentProvider {
                     context, "ownership");
             if (!"COEXIST".equals(ownership.getString("mode", "OFFICIAL"))
                     || ownership.getBoolean("hookExclusive", false)) return false;
-            Bundle relay = context.getContentResolver().call(
-                    CoexistRelayProvider.URI, "status", null, null);
-            return relay != null && relay.getBoolean("online", false)
-                    && mac != null && !mac.isBlank()
-                    && mac.equalsIgnoreCase(relay.getString("address", ""));
+            long identity = Binder.clearCallingIdentity();
+            try {
+                Bundle relay = context.getContentResolver().call(
+                        CoexistRelayProvider.URI, "status", null, null);
+                return relay != null && relay.getBoolean("online", false)
+                        && mac != null && !mac.isBlank()
+                        && mac.equalsIgnoreCase(relay.getString("address", ""));
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
         } catch (RuntimeException unavailable) {
             return false;
         }
