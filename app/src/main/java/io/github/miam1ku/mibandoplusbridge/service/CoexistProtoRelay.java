@@ -19,6 +19,8 @@ public final class CoexistProtoRelay {
     private static final int RESPONSE_TIMEOUT_MS = 10_000;
     private static final int SAFE_PAYLOAD = 16 * 1024;
     private static final AtomicLong IDS = new AtomicLong(1);
+    private static final int MAX_PENDING = 64;
+    private static final ConcurrentHashMap<Long, CompletableFuture<Void>> SENDS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Long, Pending> PENDING = new ConcurrentHashMap<>();
     private static final ScheduledThreadPoolExecutor TIMEOUTS = timeoutWorker();
 
@@ -33,21 +35,15 @@ public final class CoexistProtoRelay {
         });
         executor.setRemoveOnCancelPolicy(true);
         executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        executor.setKeepAliveTime(5, TimeUnit.SECONDS);
+        executor.allowCoreThreadTimeOut(true);
         return executor;
     }
 
     public static boolean ready(Context context) {
         if (context == null) return false;
         OwnershipController owner = new OwnershipController(context);
-        if (owner.coexistReady()) {
-            try {
-                Bundle status = context.getContentResolver().call(
-                        CoexistRelayProvider.URI, "status", null, null);
-                return status != null && status.getBoolean("online", false);
-            } catch (RuntimeException unavailable) {
-                return false;
-            }
-        }
+        if (owner.coexistReady()) return true;
         return owner.nativeReady() && BandLiveService.notificationSessionReady(context);
     }
 
@@ -66,10 +62,23 @@ public final class CoexistProtoRelay {
             if (owner.nativeReady()) return BandLiveService.sendSessionCommand(command);
             return failedVoid("COEXIST_NOT_READY");
         }
+        if (SENDS.size() + PENDING.size() >= MAX_PENDING) return failedVoid("RELAY_BUSY");
         noteDnd(command);
         long id = nextId();
-        return submit(context, id, command.toByteArray(), false, ONE_WAY_TIMEOUT_MS)
-                .thenApply(ignored -> null);
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        SENDS.put(id, future);
+        TIMEOUTS.schedule(() -> {
+            CompletableFuture<Void> expired = SENDS.remove(id);
+            if (expired != null) expired.completeExceptionally(
+                    new java.util.concurrent.TimeoutException("RELAY_SEND_TIMEOUT"));
+        }, ONE_WAY_TIMEOUT_MS + 2_000L, TimeUnit.MILLISECONDS);
+        submit(context, id, command.toByteArray(), false, ONE_WAY_TIMEOUT_MS)
+                .whenComplete((ignored, error) -> {
+                    if (error == null) return;
+                    CompletableFuture<Void> rejected = SENDS.remove(id);
+                    if (rejected != null) rejected.completeExceptionally(error);
+                });
+        return future;
     }
 
     public static CompletionStage<XiaomiProto.Command> request(Context context,
@@ -80,6 +89,7 @@ public final class CoexistProtoRelay {
         }
         OwnershipController owner = new OwnershipController(context);
         if (!owner.coexistReady()) return failedCommand("COEXIST_NOT_READY");
+        if (SENDS.size() + PENDING.size() >= MAX_PENDING) return failedCommand("RELAY_BUSY");
         noteDnd(command);
 
         long id = nextId();
@@ -142,6 +152,18 @@ public final class CoexistProtoRelay {
 
     /** Called only by CoexistRelayProvider in the bridge process. */
     public static void completeFromProvider(long id, String status, int code, byte[] payload) {
+        CompletableFuture<Void> sent = SENDS.remove(id);
+        if (sent != null) {
+            try {
+                if ("ENQUEUED".equals(status) && code >= 0) sent.complete(null);
+                else sent.completeExceptionally(new IllegalStateException(
+                        status == null || status.isBlank() ? "RELAY_SEND_FAILED" : status));
+            } finally {
+                if (payload != null) Arrays.fill(payload, (byte) 0);
+            }
+            return;
+        }
+
         Pending pending = PENDING.remove(id);
         if (pending == null) {
             if (payload != null) Arrays.fill(payload, (byte) 0);
