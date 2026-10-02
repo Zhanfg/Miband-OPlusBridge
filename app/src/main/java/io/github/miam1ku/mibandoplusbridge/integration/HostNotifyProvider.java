@@ -110,13 +110,13 @@ public final class HostNotifyProvider extends ContentProvider {
                                     when, ZoneId.systemDefault()));
             if (call && !removed && previous != 0) {
                 var next = command;
-                BandLiveService.forwardHostNotification(getContext(), BandNotificationCommand.endCall())
-                        .whenComplete((ignored, error) -> BandLiveService.forwardHostNotification(getContext(), next));
+                CoexistProtoRelay.send(getContext(), BandNotificationCommand.endCall())
+                        .whenComplete((ignored, error) -> CoexistProtoRelay.send(getContext(), next));
                 Bundle replaced = new Bundle();
                 replaced.putString("status", "QUEUED");
                 return replaced;
             }
-            var pending = BandLiveService.forwardHostNotification(getContext(), command);
+            var pending = CoexistProtoRelay.send(getContext(), command);
             String status = "QUEUED";
             if (pending.toCompletableFuture().isCompletedExceptionally()) {
                 try {
