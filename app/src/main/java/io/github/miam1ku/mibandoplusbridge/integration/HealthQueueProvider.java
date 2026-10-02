@@ -313,7 +313,15 @@ public final class HealthQueueProvider extends ContentProvider {
         }
 
         HealthRecordStore.BatchResult result = store.enqueueMeasurements(batch);
-        if (result.added() > 0) notifyRecordsChanged();
+        if (result.added() > 0) {
+            notifyRecordsChanged();
+            for (int i = 0; i < size; i++) {
+                if ("sleep_interval".equals(kinds[i])) {
+                    io.github.miam1ku.mibandoplusbridge.service.CoexistControlPlane.onSleepInterval(
+                            getContext(), starts[i], ends[i]);
+                }
+            }
+        }
         Bundle reply = status(result.added() > 0 ? "HEALTH_MIRRORED" : "HEALTH_MIRROR_UNCHANGED");
         reply.putInt("added", result.added());
         reply.putInt("unchanged", result.unchanged());
