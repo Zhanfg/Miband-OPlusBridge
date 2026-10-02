@@ -4,16 +4,21 @@ package io.github.miam1ku.mibandoplusbridge.integration;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.database.ContentObserver;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistEventRouter;
-import java.util.ArrayDeque;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
+import io.github.miam1ku.mibandoplusbridge.notify.PhoneDnd;
+import io.github.miam1ku.mibandoplusbridge.protocol.BandDndCommand;
+import java.util.ArrayDeque;
 
 /** Bounded command mailbox between the bridge process and Mi Fitness' authenticated WearApiCall. */
 public final class CoexistRelayProvider extends ContentProvider {
@@ -25,8 +30,28 @@ public final class CoexistRelayProvider extends ContentProvider {
     private final ArrayDeque<Request> pending = new ArrayDeque<>();
     private long onlineAt;
     private String onlineAddress = "";
+    private int lastDndFilter = Integer.MIN_VALUE;
+    private long lastDndAtNanos;
+    private ContentObserver dndObserver;
 
-    @Override public boolean onCreate() { return true; }
+    @Override public boolean onCreate() {
+        Handler handler = new Handler(Looper.getMainLooper());
+        dndObserver = new ContentObserver(handler) {
+            @Override public void onChange(boolean selfChange) { syncDnd(); }
+        };
+        try {
+            var resolver = getContext().getContentResolver();
+            resolver.registerContentObserver(
+                    android.provider.Settings.Global.getUriFor("zen_mode"), false, dndObserver);
+            resolver.registerContentObserver(
+                    android.provider.Settings.Secure.getUriFor("focusmode_switch"), false, dndObserver);
+            resolver.registerContentObserver(
+                    android.provider.Settings.Secure.getUriFor("focusmode_switch_new"), false, dndObserver);
+            resolver.registerContentObserver(
+                    android.provider.Settings.Secure.getUriFor("op_breath_mode_status"), false, dndObserver);
+        } catch (RuntimeException ignored) { }
+        return true;
+    }
 
     @Override public synchronized Bundle call(String method, String arg, Bundle extras) {
         if (method == null) throw new SecurityException("RELAY_METHOD_REQUIRED");
@@ -111,7 +136,23 @@ public final class CoexistRelayProvider extends ContentProvider {
         }
         Bundle out = relayStatus();
         getContext().getContentResolver().notifyChange(URI, null);
+        if (out.getBoolean("online", false)) syncDnd();
         return out;
+    }
+
+    private void syncDnd() {
+        if (!coexist() || !onlineNow()) return;
+        int filter = PhoneDnd.currentFilter(getContext());
+        long now = System.nanoTime();
+        synchronized (this) {
+            long elapsed = lastDndAtNanos == 0 ? -1 : now - lastDndAtNanos;
+            if (PhoneDnd.repeatSync(lastDndFilter, elapsed, filter)) return;
+            lastDndFilter = filter;
+            lastDndAtNanos = now;
+        }
+        for (var command : BandDndCommand.mirror(filter)) {
+            CoexistProtoRelay.send(getContext(), command);
+        }
     }
 
     private Bundle complete(Bundle extras) {
