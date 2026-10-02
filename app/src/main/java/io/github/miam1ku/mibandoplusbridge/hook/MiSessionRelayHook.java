@@ -263,6 +263,7 @@ public final class MiSessionRelayHook {
 
     private static boolean interesting(XiaomiProto.Command command) {
         int type = command.getType(), subtype = command.getSubtype();
+        if (type == 10) return true;
         if (type == 18) return subtype == 0 || subtype == 2;
         if (type == 2) return subtype == 17 || subtype == 43 || subtype == 109 || subtype == 110;
         if (type == 7) return subtype == 16;
