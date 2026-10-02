@@ -8,7 +8,9 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.ContentObserver;
 import android.os.SystemClock;
+import io.github.miam1ku.mibandoplusbridge.notify.NativeMusic;
 import io.github.miam1ku.mibandoplusbridge.notify.PhoneDnd;
+import io.github.miam1ku.mibandoplusbridge.notify.SleepMusic;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandDndCommand;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder;
 import io.github.miam1ku.mibandoplusbridge.protocol.CommandTransport;
@@ -31,12 +33,15 @@ public final class CoexistControlPlane {
     private final ScheduledThreadPoolExecutor worker;
     private final CommandTransport transport;
     private final WeatherSync weather;
+    private final SleepMusic sleepMusic = new SleepMusic();
     private final ContentObserver dndObserver;
     private final BroadcastReceiver dndReceiver;
     private boolean dndRegistered;
     private long lastWeatherAttemptNanos;
     private int lastDndFilter = Integer.MIN_VALUE;
     private long lastDndSyncNanos;
+    private boolean sleepPauseOn;
+    private long sleepArmedAtMs = Long.MAX_VALUE;
 
     private CoexistControlPlane(Context context) {
         Context app = context.getApplicationContext();
@@ -63,6 +68,7 @@ public final class CoexistControlPlane {
                 }
             }
         };
+        refreshSleepSetting(false);
         registerDndSignals();
     }
 
@@ -95,8 +101,34 @@ public final class CoexistControlPlane {
         get(context).weather.refreshAndSend();
     }
 
+    public static void sleepPauseChanged(Context context) {
+        if (context == null || !new OwnershipController(context).coexistReady()) return;
+        CoexistControlPlane control = get(context);
+        try {
+            control.worker.execute(() -> control.refreshSleepSetting(true));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
+    }
+
+    public static void onSleepCommand(Context context, XiaomiProto.Command command) {
+        if (context == null || command == null || !new OwnershipController(context).coexistReady()) return;
+        CoexistControlPlane control = get(context);
+        try {
+            control.worker.execute(() -> control.noteSleep(command));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
+    }
+
+    public static void onSleepInterval(Context context, long startMs, long endMs) {
+        if (context == null || startMs <= 0 || endMs <= startMs
+                || !new OwnershipController(context).coexistReady()) return;
+        CoexistControlPlane control = get(context);
+        try {
+            control.worker.execute(() -> control.noteSleepInterval(startMs, endMs));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
+    }
+
     private void onRelayOnline() {
         scheduleDnd(true);
+        requestSleepState();
         long now = SystemClock.elapsedRealtimeNanos();
         synchronized (this) {
             if (lastWeatherAttemptNanos != 0 && now - lastWeatherAttemptNanos < WEATHER_RETRY_NANOS) {
@@ -105,6 +137,68 @@ public final class CoexistControlPlane {
             lastWeatherAttemptNanos = now;
         }
         weather.sendIfChanged();
+    }
+
+    private void refreshSleepSetting(boolean reset) {
+        boolean enabled = SleepMusic.enabled(context);
+        long armed = SleepMusic.armedAt(context);
+        if (enabled && armed == Long.MAX_VALUE) {
+            armed = System.currentTimeMillis();
+            SleepMusic.rememberCutoff(context, armed);
+        }
+        sleepPauseOn = enabled;
+        sleepArmedAtMs = enabled ? armed : Long.MAX_VALUE;
+        if (reset) sleepMusic.reset();
+        if (enabled) requestSleepState();
+    }
+
+    private void requestSleepState() {
+        if (!sleepPauseOn || !new OwnershipController(context).coexistReady()) return;
+        transport.request(SleepMusic.query(), 2, 78).whenComplete((response, error) -> {
+            if (error != null || response == null) return;
+            try {
+                worker.execute(() -> noteSleep(response));
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { }
+        });
+    }
+
+    private void noteSleep(XiaomiProto.Command command) {
+        if (!sleepPauseOn) return;
+        Boolean asleep = SleepMusic.asleep(command);
+        if (asleep == null) return;
+        long now = System.currentTimeMillis();
+        SleepMusic.Report report = command.getSubtype() == 79
+                ? sleepMusic.push(asleep, now) : sleepMusic.observe(asleep, now);
+        if ((report.effect() == SleepMusic.Effect.BASELINE && asleep)
+                || report.effect() == SleepMusic.Effect.WOKE) {
+            if (SleepMusic.rememberCutoff(context, now)) {
+                sleepArmedAtMs = Math.max(sleepArmedAtMs, now);
+            }
+        }
+        applySleep(report, switch (report.effect()) {
+            case PAUSE -> "COEXIST_SLEEP_MUSIC pause";
+            case BASELINE -> "COEXIST_SLEEP_MUSIC baseline asleep=" + asleep;
+            case WOKE -> "COEXIST_SLEEP_MUSIC awake";
+            case UNCHANGED -> null;
+        });
+    }
+
+    private void noteSleepInterval(long startMs, long endMs) {
+        if (!sleepPauseOn) return;
+        SleepMusic.Report report = sleepMusic.currentNight(
+                startMs, endMs, sleepArmedAtMs, System.currentTimeMillis());
+        if (report.effect() == SleepMusic.Effect.PAUSE) {
+            applySleep(report, "COEXIST_SLEEP_MUSIC pause mirror");
+        }
+    }
+
+    private void applySleep(SleepMusic.Report report, String line) {
+        if (line == null) return;
+        io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context, line);
+        if (report.effect() != SleepMusic.Effect.PAUSE) return;
+        int generation = report.generation();
+        if (!sleepPauseOn || sleepMusic.generation() != generation) return;
+        NativeMusic.pause(context);
     }
 
     private void registerDndSignals() {
