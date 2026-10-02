@@ -19,6 +19,8 @@ import android.service.notification.StatusBarNotification;
 import android.telecom.TelecomManager;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
+import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
@@ -88,8 +90,8 @@ public final class BandNotificationListener extends NotificationListenerService 
     @Override public void onCreate() {
         super.onCreate();
         settings = getSharedPreferences(SETTINGS, MODE_PRIVATE);
-        relay = new NotificationRelay(command -> BandLiveService.sendNotification(this, command),
-                BandLiveService::notificationPayloadLimit, main::post);
+        relay = new NotificationRelay(command -> CoexistProtoRelay.send(this, command),
+                () -> CoexistProtoRelay.payloadLimit(this), main::post);
         settings.registerOnSharedPreferenceChangeListener(settingsChanged);
         IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_USER_PRESENT);
@@ -113,7 +115,7 @@ public final class BandNotificationListener extends NotificationListenerService 
     }
 
     private boolean sessionAllowed() {
-        return listenerConnected && accessGranted(this) && BandLiveService.notificationSessionReady(this);
+        return listenerConnected && accessGranted(this) && CoexistProtoRelay.ready(this);
     }
 
     private boolean notificationsAllowed() {
@@ -121,6 +123,12 @@ public final class BandNotificationListener extends NotificationListenerService 
     }
 
     private void wakeLive() {
+        if (new OwnershipController(this).coexistReady()) {
+            // Mi Fitness owns the transport in coexist mode. Provider notification wakes the
+            // injected relay if that process is alive; never start a second Bluetooth session.
+            resetSession();
+            return;
+        }
         try {
             BandLiveService.start(this);
         } catch (RuntimeException failure) {
@@ -135,7 +143,10 @@ public final class BandNotificationListener extends NotificationListenerService 
         boolean enabled = settings.getBoolean("enabled", true);
         boolean body = settings.getBoolean("showBody", true);
         Set<String> packages = Set.copyOf(settings.getStringSet("packages", Set.of()));
-        long session = notificationsAllowed() ? BandLiveService.notificationSessionId() : 0;
+        long session = notificationsAllowed()
+                ? (new OwnershipController(this).coexistReady()
+                        ? Long.MIN_VALUE + 102 : BandLiveService.notificationSessionId())
+                : 0;
         if (session == appliedSession && enabled == appliedEnabled && body == appliedBody
                 && packages.equals(appliedPackages)) return;
         appliedSession = session;
@@ -180,13 +191,13 @@ public final class BandNotificationListener extends NotificationListenerService 
             return;
         }
         if (PhoneAlarmNotice.ringing(item)) {
-            if (!BandLiveService.notificationSessionReady(this)) wakeLive();
+            if (!CoexistProtoRelay.ready(this)) wakeLive();
             PhoneAlarmNotice.posted(this, item);
             return;
         }
         Notification call = item.getNotification();
         if (call != null && Notification.CATEGORY_CALL.equals(call.category)) {
-            if (!BandLiveService.notificationSessionReady(this)) wakeLive();
+            if (!CoexistProtoRelay.ready(this)) wakeLive();
             skip("call", item.getPackageName());
             return;
         }
