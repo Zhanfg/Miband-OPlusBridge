@@ -223,6 +223,7 @@ public final class OwnershipController {
                 .putLong("generation", rollbackGeneration)
                 .commit();
         publish();
+        io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureDisabled(context);
     }
 
     private void publish() {
