@@ -241,6 +241,10 @@ public final class BandLiveService extends Service {
 
     /** Switch-on starts a new baseline. A sleep already underway does not pause. */
     public static void sleepPauseChanged(Context context) {
+        if (new OwnershipController(context).coexistReady()) {
+            CoexistControlPlane.sleepPauseChanged(context);
+            return;
+        }
         BandLiveService live = instance;
         if (live == null || live.stopRequested) return;
         live.sleepPauseOn = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.enabled(context);
