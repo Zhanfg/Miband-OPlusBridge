@@ -87,6 +87,7 @@ public final class MiFitnessOwnershipHook {
                 signalOnline();
                 if (state.nativeOwned) releaseOfficialLinks();
                 if (state.coexist) MiHealthMirrorHook.requestBackfill(state.generation);
+                MiSessionRelayHook.stateChanged();
                 acknowledge(state.generation);
             }
         };
@@ -95,6 +96,7 @@ public final class MiFitnessOwnershipHook {
         signalOnline();
         if (initial.nativeOwned) releaseOfficialLinks();
         if (initial.coexist) MiHealthMirrorHook.requestBackfill(initial.generation);
+        MiSessionRelayHook.stateChanged();
         acknowledge(initial.generation);
     }
 
@@ -134,6 +136,14 @@ public final class MiFitnessOwnershipHook {
     private static boolean nativeOwnership() {
         return cachedState.nativeOwned;
     }
+    static boolean coexistMode() {
+        return cachedState.coexist;
+    }
+
+    static String selectedAddress() {
+        return cachedState.mac;
+    }
+
 
     private static State refreshState() {
         Context context = hostContext;
