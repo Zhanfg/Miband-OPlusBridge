@@ -4,6 +4,7 @@ package io.github.miam1ku.mibandoplusbridge.service;
 import android.content.Context;
 import android.os.Bundle;
 import io.github.miam1ku.mibandoplusbridge.integration.CoexistRelayProvider;
+import io.github.miam1ku.mibandoplusbridge.protocol.CommandTransport;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -51,6 +52,20 @@ public final class CoexistProtoRelay {
         OwnershipController owner = new OwnershipController(context);
         if (owner.coexistReady()) return SAFE_PAYLOAD;
         return BandLiveService.notificationPayloadLimit();
+    }
+
+    public static CommandTransport transport(Context context) {
+        Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
+        return new CommandTransport() {
+            @Override public CompletionStage<Void> send(XiaomiProto.Command command) {
+                return CoexistProtoRelay.send(app, command);
+            }
+
+            @Override public CompletionStage<XiaomiProto.Command> request(
+                    XiaomiProto.Command command, int responseType, int responseSubtype) {
+                return CoexistProtoRelay.request(app, command, responseType, responseSubtype);
+            }
+        };
     }
 
     public static CompletionStage<Void> send(Context context, XiaomiProto.Command command) {
