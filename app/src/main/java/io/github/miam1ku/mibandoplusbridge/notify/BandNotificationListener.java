@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.database.ContentObserver;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -21,9 +22,13 @@ import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
+import io.github.miam1ku.mibandoplusbridge.integration.CoexistRelayProvider;
+import io.github.miam1ku.mibandoplusbridge.integration.OwnershipProvider;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Android adapter: metadata gates precede any extras/body access. */
 public final class BandNotificationListener extends NotificationListenerService {
@@ -33,6 +38,9 @@ public final class BandNotificationListener extends NotificationListenerService 
     private volatile boolean listenerConnected;
     private NotificationRelay relay;
     private SharedPreferences settings;
+    private ScheduledThreadPoolExecutor coexistCallExecutor;
+    private PhoneCallMonitor coexistCalls;
+    private boolean coexistRelayOnline;
     private long appliedSession;
     private boolean appliedEnabled, appliedBody;
     private Set<String> appliedPackages = Set.of();
@@ -41,6 +49,11 @@ public final class BandNotificationListener extends NotificationListenerService 
     private String lastSkip = "";
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsChanged = (prefs, key) -> {
         if (!"observedPackages".equals(key)) main.post(this::resetSession);
+    };
+    private final ContentObserver coexistStateChanged = new ContentObserver(main) {
+        @Override public void onChange(boolean selfChange) {
+            main.post(BandNotificationListener.this::refreshCoexistCalls);
+        }
     };
     private final BroadcastReceiver lockChanged = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -93,10 +106,17 @@ public final class BandNotificationListener extends NotificationListenerService 
         relay = new NotificationRelay(command -> CoexistProtoRelay.send(this, command),
                 () -> CoexistProtoRelay.payloadLimit(this), main::post);
         settings.registerOnSharedPreferenceChangeListener(settingsChanged);
+        try {
+            getContentResolver().registerContentObserver(
+                    OwnershipProvider.URI, false, coexistStateChanged);
+            getContentResolver().registerContentObserver(
+                    CoexistRelayProvider.URI, false, coexistStateChanged);
+        } catch (RuntimeException ignored) { }
         IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_USER_PRESENT);
         registerReceiver(lockChanged, filter, Context.RECEIVER_NOT_EXPORTED);
         instance = this;
+        main.post(this::refreshCoexistCalls);
     }
 
     @Override public void onListenerConnected() {
@@ -104,6 +124,7 @@ public final class BandNotificationListener extends NotificationListenerService 
         wakeLive();
         resetSession();
         PhoneMusic.attach(this, main);
+        refreshCoexistCalls();
     }
 
     @Override public void onListenerDisconnected() {
@@ -203,6 +224,55 @@ public final class BandNotificationListener extends NotificationListenerService 
         }
     }
 
+
+    private void refreshCoexistCalls() {
+        if (isDestroyed()) return;
+        boolean coexist = new OwnershipController(this).coexistReady();
+        if (!coexist) {
+            closeCoexistCalls();
+            return;
+        }
+        if (coexistCalls == null) {
+            ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, task -> {
+                Thread thread = new Thread(task, "OplusCoexistCalls");
+                thread.setDaemon(true);
+                thread.setPriority(Thread.MIN_PRIORITY);
+                return thread;
+            });
+            executor.setRemoveOnCancelPolicy(true);
+            executor.setKeepAliveTime(15, TimeUnit.SECONDS);
+            executor.allowCoreThreadTimeOut(true);
+            coexistCallExecutor = executor;
+            coexistCalls = new PhoneCallMonitor(this, executor);
+            coexistRelayOnline = false;
+        }
+
+        boolean online = false;
+        try {
+            android.os.Bundle status = getContentResolver().call(
+                    CoexistRelayProvider.URI, "status", null, null);
+            online = status != null && status.getBoolean("online", false);
+        } catch (RuntimeException ignored) { }
+
+        PhoneCallMonitor calls = coexistCalls;
+        if (calls == null) return;
+        if (online != coexistRelayOnline) {
+            coexistRelayOnline = online;
+            if (online) calls.connected(); else calls.disconnected();
+        } else {
+            calls.refresh();
+        }
+    }
+
+    private void closeCoexistCalls() {
+        PhoneCallMonitor calls = coexistCalls;
+        coexistCalls = null;
+        coexistRelayOnline = false;
+        if (calls != null) calls.close();
+        ScheduledThreadPoolExecutor executor = coexistCallExecutor;
+        coexistCallExecutor = null;
+        if (executor != null) executor.shutdownNow();
+    }
 
     private void skip(String reason, String pkg) {
         String line = reason + "|" + pkg;
@@ -313,6 +383,9 @@ public final class BandNotificationListener extends NotificationListenerService 
         relay.disconnected();
         BandLiveService.cancelNotifications(this);
         settings.unregisterOnSharedPreferenceChangeListener(settingsChanged);
+        try { getContentResolver().unregisterContentObserver(coexistStateChanged); }
+        catch (RuntimeException ignored) { }
+        closeCoexistCalls();
         unregisterReceiver(lockChanged);
         main.removeCallbacksAndMessages(null);
         super.onDestroy();
