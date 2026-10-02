@@ -35,7 +35,7 @@ import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
  * observable even during a blocked write. Closing the transport itself remains the caller's job;
  * interrupting the writer cannot guarantee that an underlying socket write returns.
  */
-public final class LiveCommandQueue implements AutoCloseable {
+public final class LiveCommandQueue implements CommandTransport, AutoCloseable {
     private static final int CAPACITY = 64;
     private static final int FILE_CAPACITY = 8;
     private static final int CALL_IN_FLIGHT_CAPACITY = 2;
