@@ -12,7 +12,9 @@ import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.notify.CallPresentation;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import io.github.miam1ku.mibandoplusbridge.service.HostKeepAlive;
+import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import java.time.Instant;
 import java.time.ZoneId;
 
@@ -27,7 +29,8 @@ public final class HostNotifyProvider extends ContentProvider {
         if ("trace".equals(method)) return trace(extras);
         if ("policy".equals(method)) return policy(extras);
         if ("listener".equals(method)) return listenerState();
-        if ("findWatch".equals(method) || "music".equals(method) || "forward".equals(method)) {
+        if (("findWatch".equals(method) || "music".equals(method) || "forward".equals(method))
+                && !new OwnershipController(getContext()).coexistReady()) {
             HostKeepAlive.ensureBridge(getContext());
         }
         if ("findWatch".equals(method)) return findWatch(extras);
@@ -183,7 +186,7 @@ public final class HostNotifyProvider extends ContentProvider {
         long identity = Binder.clearCallingIdentity();
         try {
             boolean start = extras == null || extras.getBoolean("start", true);
-            BandLiveService.sendSessionCommand(
+            CoexistProtoRelay.send(getContext(),
                     io.github.miam1ku.mibandoplusbridge.protocol.BandSystemCommand.findWatch(start));
             Bundle result = new Bundle();
             result.putString("status", "QUEUED");
@@ -201,7 +204,7 @@ public final class HostNotifyProvider extends ContentProvider {
     private Bundle music(Bundle extras) {
         long identity = Binder.clearCallingIdentity();
         try {
-            if (extras == null || !BandLiveService.notificationSessionReady(getContext())) {
+            if (extras == null || !CoexistProtoRelay.ready(getContext())) {
                 io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(getContext(), "MUSIC_DROP reason=session");
                 Bundle result = new Bundle();
                 result.putString("status", "FAILED");
@@ -214,9 +217,9 @@ public final class HostNotifyProvider extends ContentProvider {
                     : io.github.miam1ku.mibandoplusbridge.protocol.BandMusicCommand.playback(
                             volume, extras.getString("track", ""), extras.getString("artist", ""),
                             extras.getInt("position", 0), extras.getInt("duration", 0), state == 1);
-            int limit = BandLiveService.notificationPayloadLimit();
+            int limit = CoexistProtoRelay.payloadLimit(getContext());
             command = io.github.miam1ku.mibandoplusbridge.protocol.BandMusicCommand.fit(command, limit);
-            BandLiveService.sendSessionCommand(command);
+            CoexistProtoRelay.send(getContext(), command);
             Log.i("OplusBandBridge", "MUSIC_OUT state=" + command.getMusic().getMusicInfo().getState()
                     + " volume=" + command.getMusic().getMusicInfo().getVolume());
             io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(getContext(),
