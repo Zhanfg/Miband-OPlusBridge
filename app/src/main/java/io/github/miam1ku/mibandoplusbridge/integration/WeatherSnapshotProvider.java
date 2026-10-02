@@ -34,9 +34,11 @@ public final class WeatherSnapshotProvider extends ContentProvider {
             return switch (method) {
                 case "requestRefresh" -> {
                     requireSelf(self);
-                    // No weather polling or sending while the official app owns the band.
-                    if (!"NATIVE".equals(io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(getContext(), "ownership")
-                            .getString("mode", "OFFICIAL"))) yield status("OFFICIAL_MODE");
+                    String mode = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs
+                            .open(getContext(), "ownership").getString("mode", "OFFICIAL");
+                    if (!"NATIVE".equals(mode) && !"COEXIST".equals(mode)) {
+                        yield status("OFFICIAL_MODE");
+                    }
                     getContext().grantUriPermission(HEALTH, URI, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     if (isPending(prefs)) {
                         Bundle existing = status("WEATHER_REQUESTED");
