@@ -5,7 +5,7 @@ import android.content.Context;
 import android.service.notification.StatusBarNotification;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandAlarmCommand;
-import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
