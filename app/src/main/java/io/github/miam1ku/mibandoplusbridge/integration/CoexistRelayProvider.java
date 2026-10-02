@@ -61,6 +61,10 @@ public final class CoexistRelayProvider extends ContentProvider {
                 if (!self) throw new SecurityException("RELAY_OWNER_ONLY");
                 yield cancelCall();
             }
+            case "cancelRequest" -> {
+                if (!self) throw new SecurityException("RELAY_OWNER_ONLY");
+                yield cancelRequest(extras);
+            }
             case "status" -> {
                 if (!self) throw new SecurityException("RELAY_OWNER_ONLY");
                 yield relayStatus();
@@ -157,6 +161,23 @@ public final class CoexistRelayProvider extends ContentProvider {
             Binder.restoreCallingIdentity(token);
         }
         return status("EVENT_ACCEPTED");
+    }
+
+    private Bundle cancelRequest(Bundle extras) {
+        long id = extras == null ? -1 : extras.getLong("requestId", -1);
+        if (id <= 0) return status("RELAY_REQUEST_INVALID");
+        for (Iterator<Request> it = pending.iterator(); it.hasNext();) {
+            Request request = it.next();
+            if (request.id != id) continue;
+            it.remove();
+            java.util.Arrays.fill(request.payload, (byte) 0);
+            Bundle out = status("RELAY_REQUEST_CANCELLED");
+            out.putLong("requestId", id);
+            return out;
+        }
+        Bundle out = status("RELAY_REQUEST_NOT_PENDING");
+        out.putLong("requestId", id);
+        return out;
     }
 
     private Bundle cancelCall() {
