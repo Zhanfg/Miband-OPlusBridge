@@ -96,6 +96,18 @@ public final class BandNotificationListener extends NotificationListenerService 
         }
     }
 
+    public static void ensureDisabled(Context context) {
+        PackageManager packages = context.getPackageManager();
+        ComponentName component = new ComponentName(context, BandNotificationListener.class);
+        try { requestUnbind(component); } catch (RuntimeException ignored) { }
+        if (packages.getComponentEnabledSetting(component)
+                != PackageManager.COMPONENT_ENABLED_STATE_DISABLED) {
+            packages.setComponentEnabledSetting(component,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP);
+        }
+    }
+
     public static void connectionChanged() {
         BandNotificationListener current = instance;
         if (current != null) current.main.post(current::resetSession);
