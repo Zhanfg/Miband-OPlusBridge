@@ -34,6 +34,10 @@ public final class CoexistEventRouter {
         int type = command.getType();
         int subtype = command.getSubtype();
         try {
+            if (type == 10) {
+                CoexistControlPlane.onCommand(context, command);
+                return;
+            }
             if (type == 18) {
                 if (subtype == 0) NativeMusic.requestRefresh(context);
                 NativeMusic.onBandCommand(context, command);
