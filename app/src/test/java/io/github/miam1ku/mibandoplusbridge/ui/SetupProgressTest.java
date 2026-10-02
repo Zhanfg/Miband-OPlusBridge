@@ -52,14 +52,14 @@ public final class SetupProgressTest {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, false);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
-        assertEquals("立即同步", progress.primaryLabel());
+        assertEquals("同步到 OHealth", progress.primaryLabel());
     }
 
     @Test public void confirmedAccountHidesChecklist() {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, true);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
-        assertEquals("立即同步", progress.primaryLabel());
+        assertEquals("同步到 OHealth", progress.primaryLabel());
     }
 
     @Test public void missingBindingOutranksRegister() {
