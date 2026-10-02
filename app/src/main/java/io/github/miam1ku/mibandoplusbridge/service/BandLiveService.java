@@ -255,15 +255,23 @@ public final class BandLiveService extends Service {
 
     public static java.util.concurrent.CompletionStage<Void> requestWeather(Context context,
             io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder.Sample sample, boolean inspect) {
+        if (new OwnershipController(context).coexistReady()) {
+            return CoexistControlPlane.requestWeather(context, sample, inspect);
+        }
         BandLiveService live = instance;
         if (live == null || live.stopRequested || live.commands == null
                 || !new BandStateRepository(context).isRegistered()) {
-            return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("LIVE_SESSION_REQUIRED"));
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("LIVE_SESSION_REQUIRED"));
         }
         return inspect ? live.weatherSync.inspectCities(sample) : live.weatherSync.send(sample);
     }
 
     public static void refreshWeather(Context context) {
+        if (new OwnershipController(context).coexistReady()) {
+            CoexistControlPlane.refreshWeather(context);
+            return;
+        }
         BandLiveService live = instance;
         if (live != null && !live.stopRequested && new BandStateRepository(context).isRegistered()) {
             live.weatherSync.refreshAndSend();
