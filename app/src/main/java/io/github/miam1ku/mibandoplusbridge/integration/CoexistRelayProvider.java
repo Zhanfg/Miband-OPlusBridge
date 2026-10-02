@@ -14,7 +14,10 @@ import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistControlPlane;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistEventRouter;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
+import io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand;
 import java.util.ArrayDeque;
+import java.util.Iterator;
+import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
 
 /** Bounded command mailbox between the bridge process and Mi Fitness' authenticated WearApiCall. */
 public final class CoexistRelayProvider extends ContentProvider {
@@ -53,6 +56,10 @@ public final class CoexistRelayProvider extends ContentProvider {
             case "event" -> {
                 if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
                 yield event(extras);
+            }
+            case "cancelCall" -> {
+                if (!self) throw new SecurityException("RELAY_OWNER_ONLY");
+                yield cancelCall();
             }
             case "status" -> {
                 if (!self) throw new SecurityException("RELAY_OWNER_ONLY");
@@ -150,6 +157,43 @@ public final class CoexistRelayProvider extends ContentProvider {
             Binder.restoreCallingIdentity(token);
         }
         return status("EVENT_ACCEPTED");
+    }
+
+    private Bundle cancelCall() {
+        int removed = 0;
+        for (Iterator<Request> it = pending.iterator(); it.hasNext();) {
+            Request request = it.next();
+            if (!callPayload(request.payload)) continue;
+            it.remove();
+            java.util.Arrays.fill(request.payload, (byte) 0);
+            CoexistProtoRelay.completeFromProvider(
+                    request.id, "CALL_CANCELLED", -1, null);
+            removed++;
+        }
+        Bundle out = status("CALL_QUEUE_CANCELLED");
+        out.putInt("removed", removed);
+        return out;
+    }
+
+    private static boolean callPayload(byte[] payload) {
+        try {
+            XiaomiProto.Command command = XiaomiProto.Command.parseFrom(payload);
+            if (command.getType() != 7 || !command.hasNotification()) return false;
+            if (command.getSubtype() == 0
+                    && command.getNotification().hasNotification2()
+                    && command.getNotification().getNotification2().hasNotification3()) {
+                return BandNotificationCommand.isCall(
+                        command.getNotification().getNotification2().getNotification3());
+            }
+            if (command.getSubtype() == 1
+                    && command.getNotification().hasNotificationDismiss()) {
+                var dismiss = command.getNotification().getNotificationDismiss();
+                if (dismiss.getNotificationIdCount() != 1) return false;
+                var id = dismiss.getNotificationId(0);
+                return "phone".equals(id.getPackage()) && id.getId() == 0;
+            }
+        } catch (Exception ignored) { }
+        return false;
     }
 
     private Bundle relayStatus() {
