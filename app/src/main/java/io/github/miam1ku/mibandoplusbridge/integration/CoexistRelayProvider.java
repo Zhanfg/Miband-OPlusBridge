@@ -96,9 +96,6 @@ public final class CoexistRelayProvider extends ContentProvider {
             return status("RELAY_REQUEST_INVALID");
         }
         expire();
-        if (!onlineNow() || !selectedAddress().equalsIgnoreCase(onlineAddress)) {
-            return status("RELAY_OFFLINE");
-        }
         if (pending.size() >= CAPACITY) return status("RELAY_QUEUE_FULL");
         long id = extras.getLong("requestId", -1);
         if (id <= 0) return status("RELAY_REQUEST_INVALID");
@@ -122,7 +119,9 @@ public final class CoexistRelayProvider extends ContentProvider {
         if (request == null) return status("NO_REQUEST");
         Bundle out = status("REQUEST");
         out.putLong("requestId", request.id);
-        out.putByteArray("payload", request.payload);
+        byte[] payload = request.payload.clone();
+        out.putByteArray("payload", payload);
+        java.util.Arrays.fill(request.payload, (byte) 0);
         out.putBoolean("needResponse", request.needResponse);
         out.putInt("timeoutMs", request.timeoutMs);
         return out;
@@ -195,7 +194,10 @@ public final class CoexistRelayProvider extends ContentProvider {
 
     private void expire() {
         long now = SystemClock.elapsedRealtime();
-        while (!pending.isEmpty() && now - pending.peekFirst().createdAt > TTL_MS) pending.removeFirst();
+        while (!pending.isEmpty() && now - pending.peekFirst().createdAt > TTL_MS) {
+            Request expired = pending.removeFirst();
+            java.util.Arrays.fill(expired.payload, (byte) 0);
+        }
     }
 
     private boolean onlineNow() {
@@ -210,7 +212,7 @@ public final class CoexistRelayProvider extends ContentProvider {
     }
 
     private String selectedAddress() {
-        return LocalPrefs.open(getContext(), "ownership").getString("mac", "");
+        return LocalPrefs.open(getContext(), "band-state").getString("mac", "");
     }
 
     private static Bundle status(String value) {
