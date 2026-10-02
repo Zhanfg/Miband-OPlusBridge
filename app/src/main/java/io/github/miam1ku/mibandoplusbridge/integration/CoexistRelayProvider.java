@@ -49,6 +49,10 @@ public final class CoexistRelayProvider extends ContentProvider {
                 if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
                 yield online(extras);
             }
+            case "offline" -> {
+                if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
+                yield offline(extras);
+            }
             case "complete" -> {
                 if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
                 yield complete(extras);
@@ -122,6 +126,7 @@ public final class CoexistRelayProvider extends ContentProvider {
         }
         Bundle out = relayStatus();
         getContext().getContentResolver().notifyChange(URI, null);
+        getContext().getContentResolver().notifyChange(DeviceCardProvider.URI, null);
         if (out.getBoolean("online", false)) {
             long token = Binder.clearCallingIdentity();
             try {
@@ -131,6 +136,17 @@ public final class CoexistRelayProvider extends ContentProvider {
             }
         }
         return out;
+    }
+
+    private Bundle offline(Bundle extras) {
+        String address = extras == null ? "" : extras.getString("address", "");
+        if (!address.isBlank() && selectedAddress().equalsIgnoreCase(address)) {
+            onlineAt = 0;
+            onlineAddress = "";
+            getContext().getContentResolver().notifyChange(URI, null);
+            getContext().getContentResolver().notifyChange(DeviceCardProvider.URI, null);
+        }
+        return relayStatus();
     }
 
     private Bundle complete(Bundle extras) {
