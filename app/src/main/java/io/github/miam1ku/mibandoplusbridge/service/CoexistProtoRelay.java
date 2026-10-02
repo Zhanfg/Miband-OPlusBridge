@@ -54,6 +54,19 @@ public final class CoexistProtoRelay {
         return BandLiveService.notificationPayloadLimit();
     }
 
+    public static void cancelCall(Context context) {
+        if (context == null) return;
+        OwnershipController owner = new OwnershipController(context);
+        if (!owner.coexistReady()) {
+            if (owner.nativeReady()) BandLiveService.cancelCall(context);
+            return;
+        }
+        try {
+            context.getContentResolver().call(
+                    CoexistRelayProvider.URI, "cancelCall", null, null);
+        } catch (RuntimeException ignored) { }
+    }
+
     public static CommandTransport transport(Context context) {
         Context app = context.getApplicationContext() == null ? context : context.getApplicationContext();
         return new CommandTransport() {
