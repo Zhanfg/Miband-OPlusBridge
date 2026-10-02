@@ -7,7 +7,7 @@ import android.os.Bundle;
 import io.github.miam1ku.mibandoplusbridge.integration.WeatherSnapshotProvider;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder;
-import io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue;
+import io.github.miam1ku.mibandoplusbridge.protocol.CommandTransport;
 import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -28,7 +28,7 @@ public final class WeatherSync implements AutoCloseable {
 
     private enum Operation { REFRESH, IF_CHANGED, INSPECT, SEND }
     private final Context context;
-    private final Supplier<LiveCommandQueue> queue;
+    private final Supplier<? extends CommandTransport> queue;
     private final ScheduledExecutorService coordinator;
     private final ContentObserver observer = new ContentObserver(null) {
         @Override public void onChange(boolean selfChange) {
@@ -42,10 +42,10 @@ public final class WeatherSync implements AutoCloseable {
     private CompletableFuture<Void> active;
     private Operation operation;
     private ScheduledFuture<?> expiry;
-    private LiveCommandQueue transactionQueue;
+    private CommandTransport transactionQueue;
     private BandWeatherEncoder.Sample lastSent;
 
-    public WeatherSync(Context context, Supplier<LiveCommandQueue> queue,
+    public WeatherSync(Context context, Supplier<? extends CommandTransport> queue,
                        ScheduledExecutorService coordinator) {
         this.context = context.getApplicationContext();
         this.queue = queue;
