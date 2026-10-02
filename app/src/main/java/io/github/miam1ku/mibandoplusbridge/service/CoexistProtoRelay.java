@@ -97,8 +97,11 @@ public final class CoexistProtoRelay {
         SENDS.put(id, future);
         TIMEOUTS.schedule(() -> {
             CompletableFuture<Void> expired = SENDS.remove(id);
-            if (expired != null) expired.completeExceptionally(
-                    new java.util.concurrent.TimeoutException("RELAY_SEND_TIMEOUT"));
+            if (expired != null) {
+                cancelPending(context, id);
+                expired.completeExceptionally(
+                        new java.util.concurrent.TimeoutException("RELAY_SEND_TIMEOUT"));
+            }
         }, ONE_WAY_TIMEOUT_MS + 2_000L, TimeUnit.MILLISECONDS);
         submit(context, id, command.toByteArray(), false, ONE_WAY_TIMEOUT_MS)
                 .whenComplete((ignored, error) -> {
@@ -127,6 +130,7 @@ public final class CoexistProtoRelay {
         TIMEOUTS.schedule(() -> {
             Pending expired = PENDING.remove(id);
             if (expired != null) {
+                cancelPending(context, id);
                 expired.future.completeExceptionally(
                         new java.util.concurrent.TimeoutException("RELAY_RESPONSE_TIMEOUT"));
             }
@@ -230,6 +234,15 @@ public final class CoexistProtoRelay {
                 || command.getSubtype() == 109 || command.getSubtype() == 110)) {
             CoexistEventRouter.noteDndSent();
         }
+    }
+
+    private static void cancelPending(Context context, long id) {
+        try {
+            Bundle extras = new Bundle();
+            extras.putLong("requestId", id);
+            context.getContentResolver().call(
+                    CoexistRelayProvider.URI, "cancelRequest", null, extras);
+        } catch (RuntimeException ignored) { }
     }
 
     private static CompletionStage<Void> failedVoid(String reason) {
