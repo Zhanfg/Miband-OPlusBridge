@@ -1203,16 +1203,26 @@ public final class MainActivity extends AppCompatActivity {
     private void sendDebugCommand(String label,
             nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
         if (ownershipStatus == null) return;
-        if (!BandLiveService.notificationSessionReady(this)) {
-            try { BandLiveService.start(this); } catch (RuntimeException ignored) { }
-            String message = "会话未就绪，无法发送" + label + "。请先点「立即同步」，等手环连上后再试。";
+        if (!io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay.ready(this)) {
+            String message = "官方会话未就绪，无法发送" + label + "。请确认小米运动健康仍在托管手环。";
             ownershipStatus.setText(message);
             if (status != null) status.setText(message);
             return;
         }
         ownershipStatus.setText("正在发送" + label + "…");
         if (status != null) status.setText("正在发送" + label + "…");
-        BandLiveService.forwardHostNotification(this, command).whenComplete((ignored, error) -> main.post(() -> {
+        nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command fitted;
+        try {
+            fitted = BandNotificationCommand.fitToPayload(
+                    command,
+                    io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay.payloadLimit(this));
+        } catch (IllegalArgumentException invalid) {
+            ownershipStatus.setText(label + "发送失败：消息过大。");
+            if (status != null) status.setText(label + "发送失败：消息过大。");
+            return;
+        }
+        io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay.send(this, fitted)
+                .whenComplete((ignored, error) -> main.post(() -> {
             if (isDestroyed()) return;
             String detail = error == null ? "已确认送达手环。"
                     : ("发送失败：" + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
