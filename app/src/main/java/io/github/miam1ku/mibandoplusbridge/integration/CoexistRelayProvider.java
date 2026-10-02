@@ -13,7 +13,7 @@ import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
 import io.github.miam1ku.mibandoplusbridge.service.CoexistEventRouter;
 import java.util.ArrayDeque;
-import java.util.concurrent.atomic.AtomicLong;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 
 /** Bounded command mailbox between the bridge process and Mi Fitness' authenticated WearApiCall. */
 public final class CoexistRelayProvider extends ContentProvider {
@@ -23,7 +23,6 @@ public final class CoexistRelayProvider extends ContentProvider {
     private static final long TTL_MS = 20_000;
     private static final long ONLINE_TTL_MS = 10 * 60_000L;
     private final ArrayDeque<Request> pending = new ArrayDeque<>();
-    private final AtomicLong ids = new AtomicLong(1);
     private long onlineAt;
     private String onlineAddress = "";
 
@@ -48,7 +47,7 @@ public final class CoexistRelayProvider extends ContentProvider {
             }
             case "complete" -> {
                 if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
-                yield status("RELAY_RESULT_RECORDED");
+                yield complete(extras);
             }
             case "event" -> {
                 if (!mi) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
@@ -76,7 +75,9 @@ public final class CoexistRelayProvider extends ContentProvider {
             return status("RELAY_OFFLINE");
         }
         if (pending.size() >= CAPACITY) return status("RELAY_QUEUE_FULL");
-        long id = ids.getAndIncrement();
+        long id = extras.getLong("requestId", -1);
+        if (id <= 0) return status("RELAY_REQUEST_INVALID");
+        for (Request existing : pending) if (existing.id == id) return status("RELAY_REQUEST_DUPLICATE");
         pending.addLast(new Request(id, payload.clone(), response, timeout, SystemClock.elapsedRealtime()));
         getContext().getContentResolver().notifyChange(URI, null);
         Bundle out = status("QUEUED");
@@ -111,6 +112,20 @@ public final class CoexistRelayProvider extends ContentProvider {
         Bundle out = relayStatus();
         getContext().getContentResolver().notifyChange(URI, null);
         return out;
+    }
+
+    private Bundle complete(Bundle extras) {
+        if (extras == null) return status("RELAY_RESULT_INVALID");
+        long id = extras.getLong("requestId", -1);
+        String resultStatus = extras.getString("status", "FAILED");
+        int resultCode = extras.getInt("resultCode", -1);
+        byte[] payload = extras.getByteArray("payload");
+        if (id <= 0 || payload != null && payload.length > MAX_PAYLOAD) {
+            return status("RELAY_RESULT_INVALID");
+        }
+        CoexistProtoRelay.completeFromProvider(id, resultStatus, resultCode,
+                payload == null ? null : payload.clone());
+        return status("RELAY_RESULT_RECORDED");
     }
 
     private Bundle event(Bundle extras) {
