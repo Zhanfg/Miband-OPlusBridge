@@ -10,7 +10,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import io.github.miam1ku.mibandoplusbridge.hook.ClockAlarmHook;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandAlarmCommand;
-import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 
 /** Clock process to bridge. Only the OPPO clock uid may call. */
 public final class PhoneAlarmProvider extends ContentProvider {
