@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">小米手环桥接</string>
+    <string name="app_description">把小米手环接入 ColorOS 设备空间与 OPPO 健康。</string>
+</resources>

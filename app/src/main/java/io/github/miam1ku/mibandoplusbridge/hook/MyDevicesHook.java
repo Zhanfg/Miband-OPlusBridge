@@ -10,9 +10,6 @@ import android.database.Cursor;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 import io.github.miam1ku.mibandoplusbridge.integration.DeviceCardProvider;
 import io.github.miam1ku.mibandoplusbridge.integration.NativePanel;
 import java.lang.reflect.Method;
@@ -114,6 +111,16 @@ public final class MyDevicesHook {
         Log.i(TAG, "DEVICE_CARD_BIND cache=" + cache.getName()
                 + " register=" + register.getName()
                 + " observer=" + observerType.getName());
+        signalProjectionOnline(context, "device-card-bind:" + cache.getName());
+    }
+
+    private static void signalProjectionOnline(Context context, String stage) {
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putString("stage", stage);
+            context.getContentResolver().call(DeviceCardProvider.URI,
+                    "projectionOnline", null, extras);
+        } catch (RuntimeException ignored) { }
     }
 
     /** 设备空间读到的就是这份缓存。16 的方法名是 {@code j}，17 是 {@code f}，返回类型没变。 */
@@ -307,8 +314,12 @@ public final class MyDevicesHook {
         }
         for (String apk : apks) {
             try {
-                for (String name : DexAnchors.classNames(apk)) {
-                    if (!name.startsWith("aa.") || name.indexOf('$') >= 0 || name.length() > 6) continue;
+                for (String name : HookResolver.classNames(apk)) {
+                    if (name.indexOf(36) >= 0) continue;
+                    boolean shortObfuscated = name.startsWith("aa.") && name.length() <= 8;
+                    boolean vendorNamespace = name.startsWith("com.oplus.mydevices.")
+                            || name.startsWith("com.heytap.mydevices.");
+                    if (!shortObfuscated && !vendorNamespace) continue;
                     Class<?> type;
                     try {
                         type = Class.forName(name, false, loader);
@@ -365,6 +376,10 @@ public final class MyDevicesHook {
             session.thread.quitSafely();
             Log.w(TAG, "DEVICE_CARD_OBSERVER_UNAVAILABLE", unavailable);
         }
+    }
+
+    public static void detach() {
+        unregister();
     }
 
     private static synchronized void unregister() {

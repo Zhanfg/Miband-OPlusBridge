@@ -4,8 +4,6 @@ package io.github.miam1ku.mibandoplusbridge.hook;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;

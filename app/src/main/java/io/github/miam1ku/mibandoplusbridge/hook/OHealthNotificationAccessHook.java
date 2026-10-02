@@ -5,9 +5,9 @@ import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.util.Log;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import java.lang.reflect.Method;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /** OHealth's listener API stays false on this ROM and then disable/enable-loops the service. */
 public final class OHealthNotificationAccessHook {
@@ -19,7 +19,7 @@ public final class OHealthNotificationAccessHook {
 
     private OHealthNotificationAccessHook() {}
 
-    public static void install(ClassLoader loader) throws ClassNotFoundException {
+    public static void install(Context hostContext, ClassLoader loader) throws ClassNotFoundException {
         XC_MethodHook grant = new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 if (Boolean.TRUE.equals(param.getResult())) return;
@@ -27,9 +27,45 @@ public final class OHealthNotificationAccessHook {
                 if (context != null && granted(context)) param.setResult(true);
             }
         };
-        Class<?> companion = Class.forName(COMPANION, false, loader);
-        XposedBridge.hookAllMethods(companion, "isNotificationListenerEnabled", grant);
-        XposedBridge.hookAllMethods(Class.forName(UTIL, false, loader), "isNotificationListenerEnabled", grant);
+        Set<Class<?>> utilities = new LinkedHashSet<>();
+        try {
+            Class<?> companion = HookResolver.resolveClassByMembers(hostContext, loader, COMPANION,
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"isNotificationListenerEnabled"}, new String[0], true);
+            XposedBridge.hookAllMethods(companion, "isNotificationListenerEnabled", grant);
+            utilities.add(companion);
+        } catch (Throwable moved) {
+            Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_COMPANION_MOVED");
+        }
+        try {
+            Class<?> util = HookResolver.resolveClassByMembers(hostContext, loader, UTIL,
+                    "com.heytap.health.watch.notification.", null,
+                    new String[]{"isNotificationListenerEnabled"}, new String[0]);
+            XposedBridge.hookAllMethods(util, "isNotificationListenerEnabled", grant);
+            utilities.add(util);
+        } catch (Throwable moved) {
+            Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_UTIL_MOVED");
+        }
+        if (utilities.isEmpty()) {
+            Method anchored = null;
+            for (Class<?>[] signature : new Class<?>[][] {
+                    {Context.class}, new Class<?>[0]}) {
+                try {
+                    anchored = HookResolver.resolveAnchoredMethod(hostContext, loader,
+                            "com.heytap.health.watch.notification.__MovedNotificationListenerUtil",
+                            "isNotificationListenerEnabled",
+                            java.util.List.of("enabled_notification_listeners"),
+                            null, boolean.class, signature);
+                    break;
+                } catch (Throwable ignored) { }
+            }
+            if (anchored != null) {
+                XposedBridge.hookMethod(anchored, grant);
+                utilities.add(anchored.getDeclaringClass());
+                Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_DEX_ANCHOR "
+                        + anchored.getDeclaringClass().getName() + "#" + anchored.getName());
+            }
+        }
         XC_MethodHook keep = new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam param) {
                 Context context = contextArg(param);
@@ -40,9 +76,10 @@ public final class OHealthNotificationAccessHook {
                 if (real) param.setResult(null);
             }
         };
-        XposedBridge.hookAllMethods(companion, "runNotificationService", keep);
-        XposedBridge.hookAllMethods(Class.forName(UTIL, false, loader), "runNotificationService", keep);
-        XposedBridge.hookAllMethods(companion, "stopNotificationService", keep);
+        for (Class<?> utility : utilities) {
+            XposedBridge.hookAllMethods(utility, "runNotificationService", keep);
+            XposedBridge.hookAllMethods(utility, "stopNotificationService", keep);
+        }
         XposedHelpers.findAndHookMethod(NotificationManager.class, "isNotificationListenerAccessGranted",
                 ComponentName.class, new XC_MethodHook() {
                     @Override protected void afterHookedMethod(MethodHookParam param) {
@@ -53,8 +90,10 @@ public final class OHealthNotificationAccessHook {
                         if (context != null && granted(context)) param.setResult(true);
                     }
                 });
-        Class<?> item = Class.forName(
-                "com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem", false, loader);
+        Class<?> item = HookResolver.resolveClassByMembers(hostContext, loader,
+                "com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem",
+                "com.heytap.health.device.tab.itemview.wearable.", null,
+                new String[]{"initData", "getController", "getMTvRight"}, new String[0]);
         XposedBridge.hookAllMethods(item, "initData", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 try {
@@ -64,6 +103,9 @@ public final class OHealthNotificationAccessHook {
                 } catch (Throwable ignored) { }
             }
         });
+        if (!"com.heytap.health.device.tab.itemview.wearable.MenuNotificationItem".equals(item.getName())) {
+            Log.i("OplusBandBridge", "OHEALTH_NOTIFICATION_ITEM_ADAPTED " + item.getName());
+        }
     }
 
     private static Context contextArg(XC_MethodHook.MethodHookParam param) {

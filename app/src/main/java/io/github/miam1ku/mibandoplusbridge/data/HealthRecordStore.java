@@ -11,7 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -154,6 +156,7 @@ public final class HealthRecordStore extends SQLiteOpenHelper {
     }
 
     public record EnqueueResult(int revision, boolean added) {}
+    public record BatchResult(int added, int unchanged) {}
     public record ArchivedFile(String fileHash, String deviceId, String firmware, long capturedAtMs,
             String accountHash, int nextRecordIndex, String parseStatus, int recordCount) {}
 
@@ -168,6 +171,26 @@ public final class HealthRecordStore extends SQLiteOpenHelper {
             db.endTransaction();
         }
     }
+    public synchronized BatchResult enqueueMeasurements(List<Measurement> measurements) {
+        if (measurements == null || measurements.isEmpty()) return new BatchResult(0, 0);
+        if (measurements.size() > 256) throw new IllegalArgumentException("HEALTH_BATCH_TOO_LARGE");
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            String account = requireConfirmedAccount(db);
+            int added = 0;
+            int unchanged = 0;
+            for (Measurement measurement : measurements) {
+                EnqueueResult result = enqueue(db, account, measurement);
+                if (result.added()) added++; else unchanged++;
+            }
+            db.setTransactionSuccessful();
+            return new BatchResult(added, unchanged);
+        } finally {
+            db.endTransaction();
+        }
+    }
+
 
     /** One transaction covers deduplication, history, ledger, replacement outbox and replay cursor. */
     public synchronized EnqueueResult enqueueArchivedMeasurement(String fileHash, int expectedIndex,
@@ -519,7 +542,7 @@ public final class HealthRecordStore extends SQLiteOpenHelper {
                 if (enqueue(db, account, stage).added()) changed++;
             }
             for (SleepStageAlign.Interval interval : owned) {
-                List<String> keep = new ArrayList<>();
+                Set<String> keep = new HashSet<>();
                 for (Measurement stage : stages) {
                     if (stage.startMs < interval.endMs() && stage.endMs > interval.startMs()) keep.add(stage.recordId);
                 }

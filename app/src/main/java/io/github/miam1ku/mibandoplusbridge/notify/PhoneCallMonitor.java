@@ -19,6 +19,8 @@ import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandNotificationCommand;
 import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
+import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.HashMap;
@@ -72,10 +74,10 @@ public final class PhoneCallMonitor implements AutoCloseable {
             @Override public CompletionStage<Void> send(PhoneCallGate.Phase phase) {
                 SessionLog.line(PhoneCallMonitor.this.context, "CALL_PHASE " + phase);
                 if (phase == PhoneCallGate.Phase.NONE) restoreRinger();
-                return BandLiveService.forwardHostNotification(PhoneCallMonitor.this.context, commandFor(phase));
+                return sendCallCommand(commandFor(phase));
             }
             @Override public void cancelQueuedRing() {
-                BandLiveService.cancelCall(PhoneCallMonitor.this.context);
+                CoexistProtoRelay.cancelCall(PhoneCallMonitor.this.context);
             }
         });
         settings.registerOnSharedPreferenceChangeListener(preferenceListener);
@@ -153,8 +155,7 @@ public final class PhoneCallMonitor implements AutoCloseable {
         return !closed
                 && context.getSystemService(UserManager.class).isUserUnlocked()
                 && repository.isRegistered()
-                && "NATIVE".equals(io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership")
-                        .getString("mode", "OFFICIAL"))
+                && new OwnershipController(context).managedReady()
                 && context.checkSelfPermission(Manifest.permission.ANSWER_PHONE_CALLS)
                         == PackageManager.PERMISSION_GRANTED;
     }
@@ -207,6 +208,17 @@ public final class PhoneCallMonitor implements AutoCloseable {
         }
     }
 
+    private CompletionStage<Void> sendCallCommand(XiaomiProto.Command command) {
+        try {
+            XiaomiProto.Command fitted = BandNotificationCommand.fitToPayload(
+                    command, CoexistProtoRelay.payloadLimit(context));
+            return CoexistProtoRelay.send(context, fitted);
+        } catch (IllegalArgumentException rejected) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("CALL_PAYLOAD_REJECTED"));
+        }
+    }
+
     private XiaomiProto.Command commandFor(PhoneCallGate.Phase phase) {
         Instant now = Instant.now();
         ZoneId zone = ZoneId.systemDefault();
@@ -250,7 +262,7 @@ public final class PhoneCallMonitor implements AutoCloseable {
                 sent = true;
             }
         } catch (RuntimeException ignored) { }
-        BandLiveService.sendSessionCommand(BandNotificationCommand.smsReplyAck(sent));
+        CoexistProtoRelay.send(context, BandNotificationCommand.smsReplyAck(sent));
         if (sent) hangup();
     }
 
@@ -260,12 +272,7 @@ public final class PhoneCallMonitor implements AutoCloseable {
                 && context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
                 && phoneStateAllowed()
                 && repository.isRegistered()
-                && "NATIVE".equals(io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership")
-                        .getString("mode", "OFFICIAL"))
-                && io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership")
-                        .getBoolean("ownsDisable", false)
-                && !io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership")
-                        .getBoolean("officialRestored", false);
+                && new OwnershipController(context).managedReady();
     }
 
     private boolean phoneStateAllowed() {
@@ -278,7 +285,7 @@ public final class PhoneCallMonitor implements AutoCloseable {
     private void refreshNow(boolean freshSession) {
         if (closed) return;
         if (!eligible() || !callsEnabled()) {
-            if (!BandLiveService.notificationSessionReady(context)) disconnectGate();
+            if (!CoexistProtoRelay.ready(context)) disconnectGate();
             gate.setEnabled(false);
             stopListening();
             SessionLog.line(context, "CALL_MONITOR off eligible=" + eligible() + " enabled=" + callsEnabled());
@@ -316,7 +323,7 @@ public final class PhoneCallMonitor implements AutoCloseable {
                 current.put(listener.id, stateOf(listener.manager.getCallStateForSubscription()));
             }
             gate.setEnabled(true);
-            if (sessionConnected && BandLiveService.notificationSessionReady(context)
+            if (sessionConnected && CoexistProtoRelay.ready(context)
                     && (freshSession || !gateConnected)) {
                 gate.connected(current);
                 gateConnected = true;

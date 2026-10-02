@@ -2,20 +2,23 @@
 package io.github.miam1ku.mibandoplusbridge.service;
 
 import android.content.Context;
-import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
-import android.content.pm.PackageManager;
 import android.os.UserManager;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.concurrent.TimeUnit;
+import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
+import io.github.miam1ku.mibandoplusbridge.integration.OwnershipProvider;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/** Fixed-package, reversible connection ownership. Never accepts caller-supplied shell text. */
+/**
+ * Reversible transport ownership without root.
+ *
+ * NATIVE means the LSPosed hook inside Mi Fitness blocks/relinquishes only the
+ * imported band's Bluetooth transport. The Xiaomi package itself remains enabled.
+ */
 public final class OwnershipController {
-    private static final String BRIDGE = "io.github.miam1ku.mibandoplusbridge";
-    private static final String OFFICIAL = HostIdentity.MI_PACKAGE;
     private static final ReentrantReadWriteLock GATE = new ReentrantReadWriteLock(true);
+    private static final Object ACK_MONITOR = new Object();
+    private static final long ACK_TIMEOUT_MS = 1_500;
+    private static long acknowledgedGeneration = -1;
     private final Context context;
     private final LocalPrefs state;
 
@@ -28,64 +31,127 @@ public final class OwnershipController {
     }
 
     public OwnershipController(Context context) {
-        this.context = context.getApplicationContext();
+        this.context = context.getApplicationContext() == null ? context : context.getApplicationContext();
         state = LocalPrefs.open(this.context, "ownership");
     }
 
     public String mode() { return state.getString("mode", "OFFICIAL"); }
 
     public synchronized boolean nativeReady() {
-        return "NATIVE".equals(mode()) && state.getBoolean("ownsDisable", false)
-                && !state.getBoolean("officialRestored", false)
+        return "NATIVE".equals(mode()) && state.getBoolean("hookExclusive", false)
+                && !state.getBoolean("transitionPending", false)
                 && context.getSystemService(UserManager.class).isUserUnlocked();
     }
 
-    /** True only after the user has allowed this app in KernelSU. No grant dialog is shown. */
-    public boolean probeRoot() {
+    /** Normal operating mode: Mi Fitness keeps the authenticated transport. */
+    public synchronized boolean coexistReady() {
+        return "COEXIST".equals(mode()) && !state.getBoolean("hookExclusive", false)
+                && !state.getBoolean("transitionPending", false)
+                && context.getSystemService(UserManager.class).isUserUnlocked();
+    }
+
+    public synchronized boolean managedReady() {
+        return coexistReady() || nativeReady();
+    }
+
+    /** Called only by the authenticated OwnershipProvider hookAck path. */
+    public static void noteHookAck(long generation) {
+        if (generation < 0) return;
+        synchronized (ACK_MONITOR) {
+            if (generation > acknowledgedGeneration) acknowledgedGeneration = generation;
+            ACK_MONITOR.notifyAll();
+        }
+    }
+
+    public synchronized void enableCoexist() throws Failure {
+        GATE.writeLock().lock();
         try {
-            return "0".equals(execute("id -u", 8));
-        } catch (Failure ignored) {
-            return false;
+            requireUnlocked();
+            if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
+                throw new Failure("HOST_VERSION_UNSUPPORTED");
+            }
+            if (coexistReady()) {
+                io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
+                return;
+            }
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit()
+                    .putBoolean("transitionPending", true)
+                    .putString("mode", "COEXIST")
+                    .putBoolean("hookExclusive", false)
+                    .putBoolean("ownsDisable", false)
+                    .putBoolean("officialRestored", false)
+                    .putLong("generation", generation)
+                    .commit()) {
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                rollbackToOfficial(generation);
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
+            if (!state.edit().putBoolean("transitionPending", false).commit()) {
+                rollbackToOfficial(generation);
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
+        } finally {
+            GATE.writeLock().unlock();
+        }
+    }
+
+    /** Event-only sync request while Mi Fitness remains the transport owner. */
+    public synchronized long requestCoexistSync() throws Failure {
+        GATE.writeLock().lock();
+        try {
+            requireUnlocked();
+            if (!coexistReady()) throw new Failure("COEXIST_NOT_READY");
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit().putLong("generation", generation).commit()) {
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
+            return generation;
+        } finally {
+            GATE.writeLock().unlock();
         }
     }
 
     public synchronized void takeOver() throws Failure {
         GATE.writeLock().lock();
         try {
-        requireUnlocked();
-        if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) throw new Failure("HOST_VERSION_UNSUPPORTED");
-        requireRoot();
-        if (state.getBoolean("ownsDisable", false)) {
-            if (nativeReady()) return;
-            throw new Failure("OWNERSHIP_RECOVERY_REQUIRED");
-        }
-        int original = officialState();
-        if (original != PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
-                && original != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
-            throw new Failure("OFFICIAL_ALREADY_DISABLED");
-        }
-        if (!state.edit().putInt("originalEnabled", original).putBoolean("transitionPending", true)
-                .putBoolean("officialRestored", false).putString("mode", "OFFICIAL").commit()) {
-            throw new Failure("OWNERSHIP_STORAGE_FAILED");
-        }
-        try {
-            run("am force-stop com.mi.health", "OFFICIAL_STOP_FAILED");
-            run("pm disable-user --user 0 com.mi.health", "OFFICIAL_DISABLE_FAILED");
-            run("am force-stop com.mi.health", "OFFICIAL_STOP_FAILED");
-            if (officialState() != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER) {
-                throw new Failure("OFFICIAL_DISABLE_UNCONFIRMED");
+            requireUnlocked();
+            if (!HostIdentity.installed(context, HostIdentity.MI_PACKAGE)) {
+                throw new Failure("HOST_VERSION_UNSUPPORTED");
             }
-            ensureDoze();
-            if (!state.edit().putBoolean("ownsDisable", true).putBoolean("transitionPending", false)
-                    .putString("mode", "NATIVE").commit()) throw new Failure("OWNERSHIP_STORAGE_FAILED");
-            if (officialState() != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER) {
-                throw new Failure("OFFICIAL_DISABLE_UNCONFIRMED");
+            if (nativeReady()) {
+                io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
+                return;
             }
-            run("am force-stop com.mi.health", "OFFICIAL_STOP_FAILED");
-        } catch (Failure error) {
-            rollbackPending(original);
-            throw error;
-        }
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit()
+                    .putBoolean("transitionPending", true)
+                    .putString("mode", "NATIVE")
+                    .putBoolean("hookExclusive", true)
+                    .putBoolean("ownsDisable", false)
+                    .putBoolean("officialRestored", false)
+                    .putLong("generation", generation)
+                    .commit()) {
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            publish();
+            if (!awaitHookAck(generation, ACK_TIMEOUT_MS)) {
+                rollbackTakeover(generation);
+                throw new Failure("LSP_OWNERSHIP_ACK_TIMEOUT");
+            }
+            if (!state.edit().putBoolean("transitionPending", false).commit()) {
+                rollbackTakeover(generation);
+                throw new Failure("OWNERSHIP_STORAGE_FAILED");
+            }
+            io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(context);
         } finally {
             GATE.writeLock().unlock();
         }
@@ -94,140 +160,80 @@ public final class OwnershipController {
     public synchronized void restoreOfficial() throws Failure {
         GATE.writeLock().lock();
         try {
-        if (!state.getBoolean("ownsDisable", false) && !state.getBoolean("transitionPending", false)) return;
-        requireRoot();
-        int original = state.getInt("originalEnabled", -1);
-        if (original != 0 && original != 1) throw new Failure("ORIGINAL_STATE_UNKNOWN");
-        if (!state.getBoolean("officialRestored", false)) {
-            restorePackage(original);
-            if (officialState() != original) throw new Failure("OFFICIAL_RESTORE_UNCONFIRMED");
-            if (!state.edit().putBoolean("officialRestored", true).commit()) {
+            requireUnlocked();
+            long generation = state.getLong("generation", 0) + 1;
+            if (!state.edit()
+                    .putString("mode", "OFFICIAL")
+                    .putBoolean("hookExclusive", false)
+                    .putBoolean("ownsDisable", false)
+                    .putBoolean("transitionPending", false)
+                    .putBoolean("officialRestored", true)
+                    .remove("originalEnabled")
+                    .remove("dozeAdded")
+                    .putLong("generation", generation)
+                    .commit()) {
                 throw new Failure("OWNERSHIP_STORAGE_FAILED");
             }
-        }
-        dropDoze();
-        if (!state.edit().putString("mode", "OFFICIAL").putBoolean("ownsDisable", false)
-                .putBoolean("transitionPending", false).remove("originalEnabled")
-                .remove("officialRestored").remove("dozeAdded").commit()) {
-            throw new Failure("OWNERSHIP_STORAGE_FAILED");
-        }
+            publish();
+            io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureDisabled(context);
         } finally {
             GATE.writeLock().unlock();
         }
     }
 
     public synchronized boolean restoreIfModuleInvalid() throws Failure {
-        GATE.writeLock().lock();
-        try {
-        if (!state.getBoolean("ownsDisable", false) && !state.getBoolean("transitionPending", false)) return false;
-        if (nativeReady()) return false;
+        if (!context.getSystemService(UserManager.class).isUserUnlocked()) return false;
+        if (!"NATIVE".equals(mode()) || nativeReady()) return false;
         restoreOfficial();
         return true;
-        } finally {
-            GATE.writeLock().unlock();
-        }
     }
 
-    private void rollbackPending(int original) {
-        try {
-            restorePackage(original);
-            if (officialState() == original) {
-                dropDoze();
-                if (!state.edit().putString("mode", "OFFICIAL").putBoolean("ownsDisable", false)
-                        .putBoolean("transitionPending", false).remove("originalEnabled")
-                        .remove("officialRestored").remove("dozeAdded").commit()) {
-                    throw new Failure("OWNERSHIP_STORAGE_FAILED");
+    static boolean awaitHookAck(long generation, long timeoutMs) {
+        long deadline = System.nanoTime()
+                + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMs));
+        synchronized (ACK_MONITOR) {
+            while (acknowledgedGeneration < generation) {
+                long remainingNanos = deadline - System.nanoTime();
+                if (remainingNanos <= 0) return false;
+                long waitMs = Math.max(1,
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+                try {
+                    ACK_MONITOR.wait(waitMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return false;
                 }
             }
-        } catch (Failure ignored) {
+            return true;
         }
     }
 
-    private void restorePackage(int original) throws Failure {
-        if (original == 0) run("pm default-state --user 0 com.mi.health", "OFFICIAL_RESTORE_FAILED");
-        else if (original == 1) run("pm enable --user 0 com.mi.health", "OFFICIAL_RESTORE_FAILED");
-        else throw new Failure("ORIGINAL_STATE_UNKNOWN");
+    private void rollbackTakeover(long failedGeneration) {
+        rollbackToOfficial(failedGeneration);
     }
 
-    private int officialState() throws Failure {
-        try { return context.getPackageManager().getApplicationEnabledSetting(OFFICIAL); }
-        catch (IllegalArgumentException absent) { throw new Failure("OFFICIAL_APP_MISSING"); }
+    private void rollbackToOfficial(long failedGeneration) {
+        long rollbackGeneration = Math.max(state.getLong("generation", 0), failedGeneration) + 1;
+        state.edit()
+                .putString("mode", "OFFICIAL")
+                .putBoolean("hookExclusive", false)
+                .putBoolean("ownsDisable", false)
+                .putBoolean("transitionPending", false)
+                .putBoolean("officialRestored", true)
+                .putLong("generation", rollbackGeneration)
+                .commit();
+        publish();
+        io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureDisabled(context);
+    }
+
+    private void publish() {
+        try { context.getContentResolver().notifyChange(OwnershipProvider.URI, null); }
+        catch (RuntimeException ignored) {}
     }
 
     private void requireUnlocked() throws Failure {
         if (!context.getSystemService(UserManager.class).isUserUnlocked()) throw new Failure("USER_LOCKED");
     }
-    private void requireRoot() throws Failure {
-        if (!"0".equals(execute("id -u"))) throw new Failure("ROOT_REQUIRED");
-    }
 
-    private void ensureDoze() {
-        try {
-            String list = execute("cmd deviceidle whitelist");
-            if (list.contains(BRIDGE)) return;
-            execute("cmd deviceidle whitelist +" + BRIDGE);
-            state.edit().putBoolean("dozeAdded", true).commit();
-        } catch (Failure ignored) { }
-    }
 
-    private void dropDoze() {
-        if (!state.getBoolean("dozeAdded", false)) return;
-        try {
-            execute("cmd deviceidle whitelist -" + BRIDGE);
-        } catch (Failure ignored) { }
-    }
-
-    private void run(String fixedCommand, String failureCode) throws Failure {
-        try { execute(fixedCommand); }
-        catch (Failure failure) { throw new Failure(failureCode); }
-    }
-    static String shellQuote(String command) {
-        return "'" + command.replace("'", "'\\''") + "'";
-    }
-    private static String execute(String fixedCommand) throws Failure {
-        return execute(fixedCommand, 30);
-    }
-    private static String execute(String fixedCommand, int timeoutSeconds) throws Failure {
-        Process process = null;
-        try {
-            process = new ProcessBuilder("su", "-c", "/system/bin/sh -c " + shellQuote(fixedCommand))
-                    .redirectErrorStream(true).start();
-            if (!process.waitFor(Math.max(1, timeoutSeconds), TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new Failure("ROOT_ACTION_TIMEOUT");
-            }
-            byte[] output = process.getInputStream().readNBytes(256);
-            String text = new String(output, StandardCharsets.UTF_8).trim();
-            if (process.exitValue() != 0) throw new Failure("ROOT_ACTION_FAILED");
-            return text;
-        } catch (IOException | InterruptedException failure) {
-            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
-            throw new Failure("ROOT_ACTION_FAILED");
-        } finally {
-            if (process != null) process.destroy();
-        }
-    }
-
-    /** Fixed components only. Callers cannot pass a shell string. */
-    static String rootStartCommand(String packageName, String className, boolean foreground) {
-        if (foreground) {
-            if (!"io.github.miam1ku.mibandoplusbridge".equals(packageName)
-                    || !"io.github.miam1ku.mibandoplusbridge.service.BandLiveService".equals(className)) return null;
-            return "am start-foreground-service --user 0 -n " + packageName + "/" + className;
-        }
-        if (!"com.heytap.health".equals(packageName)
-                || !"com.heytap.health.rpc.host.HealthRpcMsgService".equals(className)) return null;
-        return "am start-service --user 0 -n " + packageName + "/" + className;
-    }
-
-    static boolean rootStart(String packageName, String className, boolean foreground) {
-        String command = rootStartCommand(packageName, className, foreground);
-        if (command == null) return false;
-        try {
-            execute(command, 8);
-            return true;
-        } catch (Failure failure) {
-            return false;
-        }
-    }
 }

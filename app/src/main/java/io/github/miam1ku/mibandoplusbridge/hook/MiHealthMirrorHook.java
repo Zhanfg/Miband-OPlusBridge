@@ -1,0 +1,560 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package io.github.miam1ku.mibandoplusbridge.hook;
+
+import android.content.Context;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.util.Log;
+import io.github.miam1ku.mibandoplusbridge.integration.HealthQueueProvider;
+import io.github.miam1ku.mibandoplusbridge.integration.OwnershipProvider;
+import java.lang.reflect.Method;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Mirrors already-parsed Mi Fitness local health records into the bridge.
+ * No Bluetooth transport, authentication material or raw protocol payload is touched here.
+ */
+public final class MiHealthMirrorHook {
+    private static final String TAG = "OplusBandBridge";
+    private static final int BATCH = 64;
+    private static final long BACKFILL_WINDOW_SECONDS = 48L * 60L * 60L;
+    private static volatile ThreadPoolExecutor writer;
+    private static volatile Backfill backfill;
+    private static volatile DeviceGate deviceGate;
+    private static volatile long lastBackfillGeneration = -1;
+    private static final Object SID_LOCK = new Object();
+    private static final Set<String> targetSids = new HashSet<>();
+    private static volatile long targetSyncUntilElapsed;
+
+    private MiHealthMirrorHook() {}
+
+    public static synchronized void install(Context context, ClassLoader loader) throws Exception {
+        if (writer != null && !writer.isShutdown()) return;
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(8), runnable -> {
+                    Thread thread = new Thread(runnable, "OplusBandHealthMirror");
+                    thread.setDaemon(true);
+                    thread.setPriority(Thread.MIN_PRIORITY);
+                    return thread;
+                });
+        writer = executor;
+
+        Class<?> utils = HookResolver.resolveClassByMembers(context, loader,
+                "com.xiaomi.fit.fitness.persist.db.utils.DailyRecordDaoUtils",
+                "com.xiaomi.fit.fitness.persist.db.", null,
+                new String[]{"recordDailyRecordToDB", "recordServerDailyDataToDB"}, new String[0]);
+        Method local = HookResolver.resolveMethod(utils, "recordDailyRecordToDB", boolean.class,
+                String.class, String.class, List.class, boolean.class);
+        Class<?> homeType = Class.forName(
+                "com.xiaomi.fit.fitness.export.data.annotation.HomeDataType", false, loader);
+        Method getAll = utils.getMethod("getAllDailyRecord",
+                homeType, String.class, long.class, long.class, int.class);
+        Object utilsInstance = XposedHelpers.getStaticObjectField(utils, "INSTANCE");
+        backfill = new Backfill(utilsInstance, getAll, homeType);
+
+        Class<?> contactClass = Class.forName(
+                "com.xiaomi.fitness.device.contact.export.DeviceContact", false, loader);
+        Object contactCompanion = XposedHelpers.getStaticObjectField(contactClass, "Companion");
+        Class<?> contactExt = Class.forName(
+                "com.xiaomi.fitness.device.contact.export.DeviceSyncExtKt", false, loader);
+        Object contact = XposedHelpers.callStaticMethod(contactExt, "getInstance", contactCompanion);
+
+        Class<?> managerClass = Class.forName(
+                "com.xiaomi.fitness.device.manager.export.WearableDeviceManager", false, loader);
+        Object managerCompanion = XposedHelpers.getStaticObjectField(managerClass, "Companion");
+        Class<?> managerExt = Class.forName(
+                "com.xiaomi.fitness.device.manager.export.DeviceManagerExtKt", false, loader);
+        Object manager = XposedHelpers.callStaticMethod(managerExt, "getInstance", managerCompanion);
+        DeviceGate gate = new DeviceGate(context, manager, contact);
+        deviceGate = gate;
+
+        XC_MethodHook syncGate = new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam param) {
+                if (param.args.length == 0 || !(param.args[0] instanceof String did)) return;
+                gate.noteSync(did);
+            }
+        };
+        XposedBridge.hookMethod(contactClass.getMethod("syncData", String.class, boolean.class), syncGate);
+        try {
+            XposedBridge.hookMethod(contactClass.getMethod("syncDataByWidget",
+                    String.class, boolean.class), syncGate);
+        } catch (NoSuchMethodException ignored) { }
+
+        XposedBridge.hookMethod(local, new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam param) {
+                if (param.hasThrowable() || !Boolean.TRUE.equals(param.getResult())) return;
+                if (!(param.args[2] instanceof List<?> models) || models.isEmpty()) return;
+                String sid = param.args[1] instanceof String value ? value : "";
+                if (!gate.acceptSid(sid)) return;
+                mirror(context, param.args[0] instanceof String key ? key : "", sid, models);
+            }
+        });
+        Log.i(TAG, "MI_HEALTH_MIRROR_READY " + utils.getName());
+        try {
+            Bundle state = context.getContentResolver().call(OwnershipProvider.URI, "state", null, null);
+            if (state != null && state.getBoolean("coexist", false)) {
+                requestBackfill(state.getLong("generation", 0));
+            }
+        } catch (RuntimeException ignored) { }
+    }
+
+    public static void requestBackfill(long generation) {
+        if (generation < 0 || generation <= lastBackfillGeneration) return;
+        Backfill currentBackfill = backfill;
+        DeviceGate gate = deviceGate;
+        if (currentBackfill == null || gate == null) return;
+        synchronized (MiHealthMirrorHook.class) {
+            if (generation <= lastBackfillGeneration) return;
+            lastBackfillGeneration = generation;
+        }
+        Thread thread = new Thread(() -> currentBackfill.run(gate, generation),
+                "OplusMiHealthBackfill");
+        thread.setDaemon(true);
+        thread.setPriority(Thread.MIN_PRIORITY);
+        thread.start();
+    }
+
+    public static synchronized void detach() {
+        ThreadPoolExecutor current = writer;
+        writer = null;
+        backfill = null;
+        deviceGate = null;
+        lastBackfillGeneration = -1;
+        synchronized (SID_LOCK) {
+            targetSids.clear();
+            targetSyncUntilElapsed = 0;
+        }
+        if (current != null) current.shutdownNow();
+    }
+
+    private static void mirror(Context context, String persistKey, String sid, List<?> models) {
+        ArrayList<Row> rows = new ArrayList<>(Math.min(models.size() * 2, 512));
+        for (Object model : models) {
+            if (model == null) continue;
+            try {
+                Object item = XposedHelpers.callMethod(model, "getItem");
+                if (item == null) continue;
+                String simple = item.getClass().getSimpleName();
+                if ("DayNightSleepReport".equals(simple) || "SleepSegmentReport".equals(simple)) {
+                    appendSleepRows(persistKey, sid, model, item, rows);
+                    continue;
+                }
+                Row row = row(persistKey, sid, model, item);
+                if (row != null) rows.add(row);
+            } catch (Throwable ignored) { }
+        }
+        if (rows.isEmpty()) return;
+
+        ThreadPoolExecutor queue = writer;
+        if (queue == null || queue.isShutdown()) return;
+        try {
+            queue.execute(() -> pushRows(context, rows));
+        } catch (RuntimeException full) {
+            Log.i(TAG, "MI_HEALTH_MIRROR_QUEUE_FULL");
+        }
+    }
+
+    private static Row row(String persistKey, String sid, Object model, Object item) {
+        if (item == null) return null;
+        String simple = item.getClass().getSimpleName();
+        String kind;
+        String getter;
+        if ("StepItem".equals(simple)) {
+            kind = "steps_interval";
+            getter = "getSteps";
+        } else if ("HrItem".equals(simple)) {
+            kind = "heart_rate";
+            getter = "getHr";
+        } else if ("Spo2Item".equals(simple)) {
+            kind = "spo2";
+            getter = "getSpo2";
+        } else if ("StressItem".equals(simple)) {
+            kind = "stress";
+            getter = "getStress";
+        } else {
+            return null;
+        }
+
+        Object rawValue = XposedHelpers.callMethod(item, getter);
+        if (!(rawValue instanceof Number number)) return null;
+        int value = number.intValue();
+        if (value < 0 || !"steps_interval".equals(kind) && value <= 0) return null;
+
+        long timestamp = number(item, "getTimestamp");
+        if (timestamp <= 0) timestamp = number(model, "getTime");
+        long startMs = toMillis(timestamp);
+        if (startMs <= 0 || startMs > Long.MAX_VALUE - 60_000L) return null;
+
+        int distance = -1;
+        int calories = -1;
+        if ("steps_interval".equals(kind)) {
+            Object rawDistance = safeCall(item, "getDistance");
+            if (rawDistance instanceof Number measured && measured.intValue() >= 0) {
+                distance = measured.intValue();
+            }
+            Object rawCalories = safeCall(item, "getCalories");
+            if (rawCalories instanceof Number measured && Float.isFinite(measured.floatValue())
+                    && measured.floatValue() >= 0f) {
+                calories = Math.round(measured.floatValue());
+            }
+        }
+        Object zone = safeCall(model, "getZoneName");
+        String timezone = zone instanceof String text ? text : "";
+        String sourceKey = persistKey + "|" + timestamp + "|" + item.getClass().getName();
+        return new Row(sourceKey, kind, startMs, startMs + 60_000L,
+                value, distance, calories, -1, false, timezone);
+    }
+
+    private static void appendSleepRows(String persistKey, String sid, Object model, Object item,
+            List<Row> rows) {
+        long bed = toMillis(number(item, "getBedTime"));
+        long wake = toMillis(number(item, "getWakeUpTime"));
+        if (wake <= 0) wake = toMillis(number(item, "getWakeupTime"));
+        if (bed <= 0 || wake <= bed) return;
+
+        Object zone = safeCall(model, "getZoneName");
+        String timezone = zone instanceof String text ? text : "";
+        boolean complete = false;
+        Object modelComplete = safeCall(model, "isCompleteSleep");
+        if (modelComplete instanceof Boolean value) {
+            complete = value;
+        } else {
+            Object incomplete = safeCall(item, "isUncomplete");
+            if (incomplete instanceof Boolean value) complete = !value;
+            else {
+                Object valid = safeCall(item, "isValidSleep");
+                complete = valid instanceof Boolean value && value;
+            }
+        }
+
+        String base = persistKey + "|" + item.getClass().getName() + "|" + bed;
+        rows.add(new Row(base + "|session", "sleep_interval", bed, wake,
+                0, -1, -1, -1, complete, timezone));
+
+        Object rawStages = safeCall(item, "getSleepItems");
+        if (!(rawStages instanceof List<?> stages)) return;
+        for (Object stageItem : stages) {
+            if (stageItem == null) continue;
+            long start = toMillis(number(stageItem, "getStartTime"));
+            long end = toMillis(number(stageItem, "getEndTime"));
+            int stage = (int) number(stageItem, "getSleepState");
+            if (stage < 2 || stage > 5) continue;
+            start = Math.max(start, bed);
+            end = Math.min(end, wake);
+            if (start <= 0 || end <= start) continue;
+            rows.add(new Row(base + "|stage|" + start, "sleep_stage", start, end,
+                    0, -1, -1, stage, false, timezone));
+        }
+    }
+
+    private static Bundle bundle(List<Row> rows) {
+        int size = rows.size();
+        String[] sourceKeys = new String[size];
+        String[] kinds = new String[size];
+        long[] starts = new long[size];
+        long[] ends = new long[size];
+        int[] values = new int[size];
+        int[] distances = new int[size];
+        int[] calories = new int[size];
+        int[] stages = new int[size];
+        boolean[] completes = new boolean[size];
+        String[] timezones = new String[size];
+        for (int i = 0; i < size; i++) {
+            Row row = rows.get(i);
+            sourceKeys[i] = row.sourceKey;
+            kinds[i] = row.kind;
+            starts[i] = row.startMs;
+            ends[i] = row.endMs;
+            values[i] = row.value;
+            distances[i] = row.distance;
+            calories[i] = row.calories;
+            stages[i] = row.stage;
+            completes[i] = row.complete;
+            timezones[i] = row.timezone;
+        }
+        Bundle payload = new Bundle();
+        payload.putStringArray("sourceKeys", sourceKeys);
+        payload.putStringArray("kinds", kinds);
+        payload.putLongArray("starts", starts);
+        payload.putLongArray("ends", ends);
+        payload.putIntArray("values", values);
+        payload.putIntArray("distances", distances);
+        payload.putIntArray("calories", calories);
+        payload.putIntArray("stages", stages);
+        payload.putBooleanArray("completes", completes);
+        payload.putStringArray("timezones", timezones);
+        return payload;
+    }
+
+    private static void pushRows(Context context, List<Row> rows) {
+        for (int offset = 0; offset < rows.size(); offset += BATCH) {
+            int end = Math.min(rows.size(), offset + BATCH);
+            Bundle payload = bundle(rows.subList(offset, end));
+            try {
+                Bundle result = context.getContentResolver().call(
+                        HealthQueueProvider.URI, "mirrorBatch", null, payload);
+                if (result != null && result.getInt("added", 0) > 0) {
+                    Log.i(TAG, "MI_HEALTH_MIRROR "
+                            + result.getString("status", "unknown")
+                            + " added=" + result.getInt("added", 0));
+                }
+            } catch (RuntimeException rejected) {
+                Log.i(TAG, "MI_HEALTH_MIRROR_REJECTED " + rejected.getClass().getSimpleName());
+                return;
+            } finally {
+                payload.clear();
+            }
+        }
+    }
+
+    private static long number(Object target, String getter) {
+        Object value = safeCall(target, getter);
+        return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    private static Object safeCall(Object target, String getter) {
+        if (target == null) return null;
+        try { return XposedHelpers.callMethod(target, getter); }
+        catch (Throwable ignored) { return null; }
+    }
+
+    private static long toMillis(long time) {
+        return time > 0 && time < 10_000_000_000L ? time * 1000L : time;
+    }
+
+    private static final class DeviceGate {
+        private static final long TARGET_SYNC_WINDOW_MS = 180_000L;
+        private static final long PHONE_SID_CACHE_MS = 60_000L;
+        private final Context context;
+        private final Object manager;
+        private final Object contact;
+        private final Set<String> phoneSids = new HashSet<>();
+        private String cachedTargetMac = "";
+        private String cachedTargetDid = "";
+        private long phoneSidRefreshedAt;
+
+        DeviceGate(Context context, Object manager, Object contact) {
+            this.context = context;
+            this.manager = manager;
+            this.contact = contact;
+        }
+
+        void noteSync(String did) {
+            if (did == null || did.isBlank()) return;
+            boolean target = isTargetDid(did);
+            synchronized (SID_LOCK) {
+                if (target) {
+                    targetSyncUntilElapsed = SystemClock.elapsedRealtime() + TARGET_SYNC_WINDOW_MS;
+                } else {
+                    targetSyncUntilElapsed = 0;
+                }
+            }
+        }
+
+        boolean acceptSid(String sid) {
+            if (sid == null || sid.isBlank() || phoneSid(sid)) return false;
+            synchronized (SID_LOCK) {
+                if (targetSids.contains(sid)) return true;
+                if (SystemClock.elapsedRealtime() <= targetSyncUntilElapsed
+                        && !cachedTargetDid.isBlank()) {
+                    targetSids.add(sid);
+                    Log.i(TAG, "MI_HEALTH_TARGET_SID_LEARNED");
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        boolean isTargetDid(String did) {
+            String target = resolveTargetDid();
+            return !target.isBlank() && target.equals(did);
+        }
+
+        boolean triggerTargetSync() {
+            String did = resolveTargetDid();
+            if (did.isBlank()) return false;
+            try {
+                Object idle = safeCall(contact, "isIDLE");
+                if (idle instanceof Boolean ready && !ready) return false;
+                noteSync(did);
+                XposedHelpers.callMethod(contact, "syncData", did, true);
+                return true;
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        }
+
+        List<String> targetSids() {
+            synchronized (SID_LOCK) {
+                return List.copyOf(targetSids);
+            }
+        }
+
+        private synchronized String resolveTargetDid() {
+            String mac = targetMac();
+            if (mac.isBlank()) return "";
+            if (!mac.equals(cachedTargetMac)) {
+                cachedTargetMac = mac;
+                cachedTargetDid = "";
+                synchronized (SID_LOCK) {
+                    targetSids.clear();
+                    targetSyncUntilElapsed = 0;
+                }
+            }
+            if (!cachedTargetDid.isBlank()) return cachedTargetDid;
+            Object all = safeCall(manager, "getAllDeviceList");
+            if (!(all instanceof List<?> devices)) return "";
+            for (Object device : devices) {
+                if (device == null || !mac.equals(deviceMac(device))) continue;
+                Object did = safeCall(device, "getDid");
+                if (did instanceof String value && !value.isBlank()) {
+                    cachedTargetDid = value;
+                    return value;
+                }
+            }
+            return "";
+        }
+
+        private String targetMac() {
+            try {
+                Bundle state = context.getContentResolver().call(
+                        OwnershipProvider.URI, "state", null, null);
+                return state == null ? "" : normalizeMac(state.getString("mac", ""));
+            } catch (RuntimeException unavailable) {
+                return cachedTargetMac;
+            }
+        }
+
+        private String deviceMac(Object device) {
+            for (Object candidate : new Object[]{device, safeCall(device, "getDeviceInfo")}) {
+                if (candidate == null) continue;
+                for (String getter : new String[]{"getAddress", "getMac", "getMacAddress"}) {
+                    Object value = safeCall(candidate, getter);
+                    if (value instanceof String text) {
+                        String normalized = normalizeMac(text);
+                        if (!normalized.isBlank()) return normalized;
+                    }
+                }
+            }
+            return "";
+        }
+
+        private boolean phoneSid(String sid) {
+            long now = SystemClock.elapsedRealtime();
+            synchronized (this) {
+                if (now - phoneSidRefreshedAt >= PHONE_SID_CACHE_MS || phoneSidRefreshedAt == 0) {
+                    phoneSids.clear();
+                    for (String getter : new String[]{"getLocalPhoneSid", "getCurrentPhoneSid"}) {
+                        Object value = safeCall(manager, getter);
+                        if (value instanceof String text && !text.isBlank()) phoneSids.add(text);
+                    }
+                    phoneSidRefreshedAt = now;
+                }
+                return phoneSids.contains(sid);
+            }
+        }
+
+        private static String normalizeMac(String value) {
+            if (value == null) return "";
+            String normalized = value.replaceAll("[^0-9A-Fa-f]", "").toUpperCase(java.util.Locale.ROOT);
+            return normalized.length() == 12 ? normalized : "";
+        }
+    }
+
+    private static final class Backfill {
+        private static final int MAX_ROWS = 12_000;
+        private final Object utils;
+        private final Method getAll;
+        private final Class<?> homeType;
+
+        Backfill(Object utils, Method getAll, Class<?> homeType) {
+            this.utils = utils;
+            this.getAll = getAll;
+            this.homeType = homeType;
+        }
+
+        void run(DeviceGate gate, long generation) {
+            try {
+                gate.triggerTargetSync();
+                long waitUntil = SystemClock.elapsedRealtime() + 4_000L;
+                while (gate.targetSids().isEmpty() && SystemClock.elapsedRealtime() < waitUntil) {
+                    try {
+                        Thread.sleep(100L);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                List<String> sids = gate.targetSids();
+                if (sids.isEmpty()) {
+                    Log.i(TAG, "MI_HEALTH_BACKFILL_WAITING_FOR_TARGET_SID gen=" + generation);
+                    return;
+                }
+
+                long end = Instant.now().getEpochSecond() + 60L;
+                long start = Math.max(0L, end - BACKFILL_WINDOW_SECONDS);
+                int zoneOffset = ZoneId.systemDefault().getRules()
+                        .getOffset(Instant.now()).getTotalSeconds();
+                int total = 0;
+                for (String sid : sids) {
+                    for (String[] metric : new String[][]{
+                            {"STEP", "steps"}, {"HR", "hr"}, {"SPO2", "spo2"},
+                            {"STRESS", "stress"}, {"SLEEP", "sleep"}}) {
+                        Object type = homeType.getField(metric[0]).get(null);
+                        Object result = getAll.invoke(utils, type, sid, start, end, zoneOffset);
+                        ArrayList<Row> rows = new ArrayList<>();
+                        collect(metric[1], sid, result, rows, MAX_ROWS - total);
+                        if (!rows.isEmpty()) {
+                            pushRows(gate.context, rows);
+                            total += rows.size();
+                            if (total >= MAX_ROWS) break;
+                        }
+                    }
+                    if (total >= MAX_ROWS) break;
+                }
+                Log.i(TAG, "MI_HEALTH_BACKFILL_DONE gen=" + generation + " rows=" + total);
+            } catch (Throwable failure) {
+                Log.i(TAG, "MI_HEALTH_BACKFILL_FAILED " + failure.getClass().getSimpleName());
+            }
+        }
+
+        private static void collect(String persistKey, String sid, Object value,
+                List<Row> rows, int remaining) {
+            if (value == null || remaining <= 0 || rows.size() >= remaining) return;
+            if (value instanceof Map<?, ?> map) {
+                for (Object item : map.values()) {
+                    collect(persistKey, sid, item, rows, remaining);
+                    if (rows.size() >= remaining) return;
+                }
+                return;
+            }
+            if (value instanceof Iterable<?> iterable) {
+                for (Object item : iterable) {
+                    collect(persistKey, sid, item, rows, remaining);
+                    if (rows.size() >= remaining) return;
+                }
+                return;
+            }
+            String simple = value.getClass().getSimpleName();
+            if ("DayNightSleepReport".equals(simple) || "SleepSegmentReport".equals(simple)) {
+                appendSleepRows(persistKey, sid, value, value, rows);
+                return;
+            }
+            Row row = row(persistKey, sid, value, value);
+            if (row != null) rows.add(row);
+        }
+    }
+
+    private record Row(String sourceKey, String kind, long startMs, long endMs,
+                       int value, int distance, int calories, int stage,
+                       boolean complete, String timezone) {}
+}

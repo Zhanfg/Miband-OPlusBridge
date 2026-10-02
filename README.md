@@ -6,24 +6,35 @@
 
 在设备空间里管理这只手环，查看连接与电量，并把步数、心率、睡眠写入 OPPO 健康；手机通知和来电可以转到手环，当前播放走 OPPO 健康自己的音乐控制。首页可打开「入睡后暂停音乐」：手环报入睡后暂停手机播放，醒来不自动续播。不回报实时入睡的手环，等睡眠记录同步后再暂停。手环查找手机会走 OPPO 健康自己的响铃，健康设备页也可以让这只手环响。健康首页若在导入完成前就打开，导入结束后会再读一次，不用先点「我的」。日常不必再打开小米运动健康。小米手环 11 已实机验证。手环 8 / 8 Pro / 9 / 9 Pro / 10 / 10 Pro 及 NFC、活力版只要官方重连是 SPP 或 GATT + WearAuthV2、且没有 OOB 额外认证，即可导入接管。SPP V2、SPP V1（8 Pro）和纯 BLE（fe95）在连接时按采集 profile 分支。纯 BLE 用已导入的密钥重连，系统蓝牙配对掉了也能连；SPP 仍要求系统配对还在。
 
-接管期间连接留在前台服务里重连。健康还在、服务被系统杀掉时，健康读卡片或转发通知会把服务拉起来。控制中心可以添加「手环」，下拉或点一下会拉起连接，不会断开。后台限制拦住时用 root 启动。服务这边把健康进程绑回来，绑不上再用 root 拉健康。会话还没就绪的通知先留着，连上后续发；普通通知最多留 60 秒，来电 15 秒。健康不会把桥接界面从后台拉起来。通知只留一条折叠的「手环已连接」，同步文件时不再改它。
+接管期间由前台连接服务维持真实手环会话，但空闲维护改为按最早 deadline 单次唤醒，不再固定分钟级轮询。Android 16 可把手环关联为 Companion Device：手环重新出现在 BLE 范围内或蓝牙连接时，由系统按设备在场状态唤醒桥接，不需要 Root 守护。控制中心、设备卡、通知等真实事件也会尝试拉起连接。会话尚未就绪的通知先暂存，连上后续发；普通通知最多保留 60 秒，来电 15 秒。小米运动健康保持安装和启用，LSPosed 只让出已导入 MAC 对应手环的 RFCOMM / GATT transport，不会禁用整个应用。
 
 
 包名：`io.github.miam1ku.mibandoplusbridge`
+
+当前 Xposed 元数据：
+
+- `minApiVersion=102`
+- `targetApiVersion=102`
+- `autoHotReload=true`
+- modern 入口：`META-INF/xposed/java_init.list`
+- 不再打包 legacy `assets/xposed_init`
+
 
 点击链接加入群聊【Miband-OPlusBridge】：https://qm.qq.com/q/eEk3EsgSH0
 
 ## 安装
 
-1. 安装 [LSPosed](https://github.com/LSPosed/LSPosed)（Zygisk）。
+1. 准备支持 modern libxposed API 102 的 LSPosed 环境。桥接 APK 本身不需要 Root / KernelSU 授权。
 2. 安装本模块 APK，在 LSPosed 中启用，作用域勾选：
    - `com.heytap.mydevices`（设备空间）
    - `com.heytap.health`（OPPO 健康）
-   - `com.mi.health`（导入绑定时需要）
+   - `com.mi.health`（绑定导入 + 目标手环 transport ownership）
    - `com.coloros.alarmclock`（时钟）
-3. 在 KernelSU 里对本应用授权。
-4. 打开「小米手环桥接」：检查 Root → 导入已配对手环 → 添加到健康。导入时会记录连接参数；若首页提示「连接参数丢失」，先恢复官方管理，再在小米运动健康中重连一次手环。
-5. 强停「设备空间」和「OPPO 健康」后再打开。
+3. 打开「小米手环桥接」：验证 LSPosed → 导入已配对手环 → 添加到健康。接管前会实时 ping 小米运动健康进程中的 API 102 Hook；没有回应时不会抢占蓝牙。
+4. 导入时会记录连接参数；若首页提示「连接参数丢失」，恢复官方管理后，在小米运动健康中重连一次手环重新采集。
+5. 建议在「系统低功耗保活」里完成一次 Companion Device 关联。关联后系统可根据手环在场/蓝牙连接事件唤醒桥接，减少自维护后台逻辑。
+6. 首次安装或作用域变化后重新打开对应宿主。API 102 模块本身启用了 `autoHotReload=true`，支持框架热重载；重载前会主动注销桥接注册的 observer、receiver 和 HandlerThread，避免重复回调。
+
 旧包名 `io.github.oplusband.bridge` 与本包不能共存数据。换包后需重新导入。
 
 ## 协议测试

@@ -27,6 +27,10 @@ public final class DeviceCardProvider extends ContentProvider {
     private static final String HOST = "com.heytap.mydevices";
     private static final String HEALTH = "com.heytap.health";
     private static final String[] COLUMNS = {"device_id", "device_mac", "device_data", "authority"};
+    private static volatile long healthProjectionSeen;
+    private static volatile long devicesProjectionSeen;
+    private static volatile String healthProjectionStage = "";
+    private static volatile String devicesProjectionStage = "";
 
     @Override public boolean onCreate() { return true; }
 
@@ -45,6 +49,14 @@ public final class DeviceCardProvider extends ContentProvider {
         int uid = Binder.getCallingUid();
         if (uid == Process.myUid()) return;
         if (!uidHas(HEALTH)) throw new SecurityException("DEVICE_SYNC_CALLER_NOT_AUTHORIZED");
+    }
+
+    private static boolean recent(long now, long then) {
+        return then > 0 && now >= then && now - then < 10 * 60_000L;
+    }
+
+    private static long age(long now, long then) {
+        return then <= 0 || now < then ? -1 : now - then;
     }
 
     private boolean uidHas(String packageName) {
@@ -100,7 +112,7 @@ public final class DeviceCardProvider extends ContentProvider {
             if (!actual.equals(selectionArgs[0])) return result;
         }
         try {
-            JSONObject data = deviceData(state, deviceId, mac);
+            JSONObject data = deviceData(getContext(), state, deviceId, mac);
             MatrixCursor.RowBuilder row = result.newRow();
             for (String column : requested) {
                 row.add(switch (column) {
@@ -122,9 +134,10 @@ public final class DeviceCardProvider extends ContentProvider {
         return false;
     }
 
-    private static JSONObject deviceData(io.github.miam1ku.mibandoplusbridge.data.LocalPrefs state,
+    private static JSONObject deviceData(Context context,
+            io.github.miam1ku.mibandoplusbridge.data.LocalPrefs state,
             String deviceId, String mac) throws JSONException {
-        boolean connected = state.getBoolean("registered", false) && state.getBoolean("connected", false);
+        boolean connected = effectiveConnected(context, state, mac);
         String connectState = connected ? "CONNECTED" : "DISCONNECTED";
         int battery = state.getInt("battery", -1);
         JSONArray batteries = new JSONArray();
@@ -165,6 +178,30 @@ public final class DeviceCardProvider extends ContentProvider {
         return data;
     }
 
+    private static boolean effectiveConnected(Context context,
+            io.github.miam1ku.mibandoplusbridge.data.LocalPrefs state, String mac) {
+        if (!state.getBoolean("registered", false)) return false;
+        if (state.getBoolean("connected", false)) return true;
+        try {
+            var ownership = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(
+                    context, "ownership");
+            if (!"COEXIST".equals(ownership.getString("mode", "OFFICIAL"))
+                    || ownership.getBoolean("hookExclusive", false)) return false;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                Bundle relay = context.getContentResolver().call(
+                        CoexistRelayProvider.URI, "status", null, null);
+                return relay != null && relay.getBoolean("online", false)
+                        && mac != null && !mac.isBlank()
+                        && mac.equalsIgnoreCase(relay.getString("address", ""));
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
     @Override public String getType(Uri uri) {
         requireReader();
         requireUri(uri);
@@ -187,6 +224,42 @@ public final class DeviceCardProvider extends ContentProvider {
     }
 
     @Override public Bundle call(String method, String arg, Bundle extras) {
+        if ("projectionOnline".equals(method)) {
+            requireReader();
+            String stage = extras == null ? "" : extras.getString("stage", "");
+            if (stage.length() > 96) stage = stage.substring(0, 96);
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (uidHas(HEALTH)) {
+                healthProjectionSeen = now;
+                healthProjectionStage = stage;
+            }
+            if (uidHas(HOST)) {
+                devicesProjectionSeen = now;
+                devicesProjectionStage = stage;
+            }
+            Bundle result = new Bundle();
+            result.putString("status", "PROJECTION_ONLINE_RECORDED");
+            return result;
+        }
+        if ("projectionStatus".equals(method)) {
+            if (!HostIdentity.isSelf()) throw new SecurityException("OWNER_ONLY");
+            long now = android.os.SystemClock.elapsedRealtime();
+            Bundle result = new Bundle();
+            result.putBoolean("healthOnline", recent(now, healthProjectionSeen));
+            result.putBoolean("devicesOnline", recent(now, devicesProjectionSeen));
+            result.putString("healthStage", healthProjectionStage);
+            result.putString("devicesStage", devicesProjectionStage);
+            result.putLong("healthAgeMs", age(now, healthProjectionSeen));
+            result.putLong("devicesAgeMs", age(now, devicesProjectionSeen));
+            return result;
+        }
+        if ("projectionRefresh".equals(method)) {
+            if (!HostIdentity.isSelf()) throw new SecurityException("OWNER_ONLY");
+            getContext().getContentResolver().notifyChange(URI, null);
+            Bundle result = new Bundle();
+            result.putString("status", "PROJECTION_REFRESHED");
+            return result;
+        }
         if ("requestSync".equals(method)) {
             requireSyncCaller();
             long identity = Binder.clearCallingIdentity();
@@ -213,7 +286,8 @@ public final class DeviceCardProvider extends ContentProvider {
         display.putString("modelId", state.getString("modelId", ""));
         display.putString("firmware", state.getString("verifiedFirmware", ""));
         display.putString("hardware", state.getString("verifiedHardware", ""));
-        display.putBoolean("connected", registered && state.getBoolean("connected", false));
+        display.putBoolean("connected", effectiveConnected(getContext(), state,
+                state.getString("mac", "")));
         display.putInt("battery", state.getInt("battery", -1));
         display.putBoolean("charging", state.getBoolean("charging", false));
         display.putInt("historyFiles", new io.github.miam1ku.mibandoplusbridge.data.RawFitnessFileStore(getContext()).storedFiles());

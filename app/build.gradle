@@ -32,17 +32,18 @@ android {
     }
     buildTypes {
         debug {
-            signingConfig keyPath != null ? signingConfigs.projectKey : null
+            // Keep AGP's ordinary debug signing when no project key is supplied.
+            if (keyPath != null) signingConfig signingConfigs.projectKey
         }
         release {
-            signingConfig keyPath != null ? signingConfigs.projectKey : null
+            if (keyPath != null) signingConfig signingConfigs.projectKey
             minifyEnabled false
         }
     }
 }
 
 tasks.configureEach {
-    if (name == 'packageDebug' || name == 'packageRelease') {
+    if (name == 'packageRelease') {
         doFirst {
             ['OPLUSBAND_KEYSTORE', 'OPLUSBAND_STORE_PASSWORD', 'OPLUSBAND_KEY_ALIAS',
              'OPLUSBAND_KEY_PASSWORD'].each {
@@ -62,7 +63,7 @@ protobuf {
 }
 
 dependencies {
-    compileOnly 'de.robv.android.xposed:api:82'
+    compileOnly 'io.github.libxposed:api:102.0.0'
     implementation 'com.google.protobuf:protobuf-javalite:4.32.0'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.81'
     implementation 'androidx.appcompat:appcompat:1.7.0'

@@ -35,6 +35,9 @@ public final class BandLiveService extends Service {
     private volatile io.github.miam1ku.mibandoplusbridge.protocol.LiveCommandQueue commands;
     private LiveHistorySync historySync;
     private volatile boolean syncRequested;
+    /** One-shot runtime wakes. No fixed-rate maintenance thread while the session is idle. */
+    private volatile java.util.concurrent.ScheduledFuture<?> maintenanceWake;
+    private volatile java.util.concurrent.ScheduledFuture<?> heldExpiryWake;
     private long nextBatteryAt;
     private long nextHealthAt;
     private long nextWeatherAt;
@@ -174,12 +177,15 @@ public final class BandLiveService extends Service {
         }
     }
 
-    private static void launch(Context context, boolean waitForRoot) {
+    private static void launch(Context context, boolean ignoredLegacyWaitFlag) {
         try {
             context.startForegroundService(new Intent(context, BandLiveService.class));
         } catch (RuntimeException backgroundRejected) {
-            if (waitForRoot) HostKeepAlive.startBridge(context);
-            else HostKeepAlive.startBridgeAsync(context);
+            // No root fallback. A companion association grants the background FGS path
+            // when Android reports the band present/connected.
+            CompanionPresence.ensureObserving(context);
+            io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context,
+                    "WAKE_BRIDGE deferred=" + backgroundRejected.getClass().getSimpleName());
         }
     }
 
@@ -210,10 +216,7 @@ public final class BandLiveService extends Service {
         if (diagnosticPaused) return "OPEN_CONFIG_REQUIRED";
         if (!context.getSystemService(android.os.UserManager.class).isUserUnlocked()) return "OPEN_CONFIG_REQUIRED";
         if (!new BandStateRepository(context).isRegistered()) return "DEVICE_NOT_REGISTERED";
-        var ownership = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
-        if (!"NATIVE".equals(ownership.getString("mode", "OFFICIAL"))
-                || !ownership.getBoolean("ownsDisable", false)
-                || ownership.getBoolean("officialRestored", false)) return "NATIVE_OWNERSHIP_REQUIRED";
+        if (!new OwnershipController(context).nativeReady()) return "NATIVE_OWNERSHIP_REQUIRED";
         BandLiveService live = instance;
         if (live != null && !live.stopRequested) {
             live.syncRequested = true;
@@ -222,7 +225,7 @@ public final class BandLiveService extends Service {
                 live.stopLock.notifyAll();
             }
             try {
-                live.coordinator.execute(live::tick);
+                live.scheduleMaintenance(0);
                 return "ACCEPTED";
             } catch (java.util.concurrent.RejectedExecutionException stopping) {
                 return "OPEN_CONFIG_REQUIRED";
@@ -238,6 +241,10 @@ public final class BandLiveService extends Service {
 
     /** Switch-on starts a new baseline. A sleep already underway does not pause. */
     public static void sleepPauseChanged(Context context) {
+        if (new OwnershipController(context).coexistReady()) {
+            CoexistControlPlane.sleepPauseChanged(context);
+            return;
+        }
         BandLiveService live = instance;
         if (live == null || live.stopRequested) return;
         live.sleepPauseOn = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.enabled(context);
@@ -247,19 +254,28 @@ public final class BandLiveService extends Service {
             live.nextSleepFileAt = System.nanoTime();
             live.requestSleepState();
         }
+        live.scheduleMaintenance(0);
     }
 
     public static java.util.concurrent.CompletionStage<Void> requestWeather(Context context,
             io.github.miam1ku.mibandoplusbridge.protocol.BandWeatherEncoder.Sample sample, boolean inspect) {
+        if (new OwnershipController(context).coexistReady()) {
+            return CoexistControlPlane.requestWeather(context, sample, inspect);
+        }
         BandLiveService live = instance;
         if (live == null || live.stopRequested || live.commands == null
                 || !new BandStateRepository(context).isRegistered()) {
-            return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("LIVE_SESSION_REQUIRED"));
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("LIVE_SESSION_REQUIRED"));
         }
         return inspect ? live.weatherSync.inspectCities(sample) : live.weatherSync.send(sample);
     }
 
     public static void refreshWeather(Context context) {
+        if (new OwnershipController(context).coexistReady()) {
+            CoexistControlPlane.refreshWeather(context);
+            return;
+        }
         BandLiveService live = instance;
         if (live != null && !live.stopRequested && new BandStateRepository(context).isRegistered()) {
             live.weatherSync.refreshAndSend();
@@ -270,9 +286,7 @@ public final class BandLiveService extends Service {
         BandLiveService live = instance;
         if (live == null || live.stopRequested || live.commands == null
                 || !new BandStateRepository(context).isRegistered()) return false;
-        var owner = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
-        return "NATIVE".equals(owner.getString("mode", "OFFICIAL"))
-                && owner.getBoolean("ownsDisable", false) && !owner.getBoolean("officialRestored", false);
+        return new OwnershipController(context).nativeReady();
     }
     private static String sessionReason(Context context) {
         BandLiveService live = instance;
@@ -281,8 +295,7 @@ public final class BandLiveService extends Service {
         var owner = io.github.miam1ku.mibandoplusbridge.data.LocalPrefs.open(context, "ownership");
         return "session registered=" + registered
                 + " mode=" + owner.getString("mode", "OFFICIAL")
-                + " ownsDisable=" + owner.getBoolean("ownsDisable", false)
-                + " restored=" + owner.getBoolean("officialRestored", false);
+                + " hookExclusive=" + owner.getBoolean("hookExclusive", false);
     }
 
     public static boolean callsOwned() {
@@ -461,7 +474,11 @@ public final class BandLiveService extends Service {
     private static java.util.concurrent.CompletionStage<Void> holdNotification(Context context,
             nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto.Command command) {
         io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(context, "NOTIFY_HOLD");
-        return HELD_NOTIFICATIONS.add(command, android.os.SystemClock.elapsedRealtime());
+        var future = HELD_NOTIFICATIONS.add(command, android.os.SystemClock.elapsedRealtime());
+        BandLiveService live = instance;
+        if (live != null && !live.stopRequested) live.scheduleHeldExpiry();
+        else HostKeepAlive.ensureBridge(context);
+        return future;
     }
 
     private void expireHeld() {
@@ -470,12 +487,35 @@ public final class BandLiveService extends Service {
                 "NOTIFY_DROP reason=expired count=" + expired);
     }
 
+    /** Arm exactly one wake for the oldest held notification instead of polling every five seconds. */
+    private void scheduleHeldExpiry() {
+        try { coordinator.execute(this::armHeldExpiry); }
+        catch (java.util.concurrent.RejectedExecutionException stopping) { }
+    }
+
+    private void armHeldExpiry() {
+        java.util.concurrent.ScheduledFuture<?> previous = heldExpiryWake;
+        if (previous != null) previous.cancel(false);
+        heldExpiryWake = null;
+        if (stopRequested) return;
+        long delayMs = HELD_NOTIFICATIONS.nextExpiryDelay(android.os.SystemClock.elapsedRealtime());
+        if (delayMs < 0) return;
+        try {
+            heldExpiryWake = coordinator.schedule(() -> {
+                heldExpiryWake = null;
+                expireHeld();
+                armHeldExpiry();
+            }, delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException stopping) { }
+    }
+
     private void replayHeld() {
         long now = android.os.SystemClock.elapsedRealtime();
         int expired = HELD_NOTIFICATIONS.expire(now);
         if (expired > 0) io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                 "NOTIFY_DROP reason=expired count=" + expired);
         for (var held : HELD_NOTIFICATIONS.poll(now)) deliverHeld(held);
+        scheduleHeldExpiry();
     }
 
     private void deliverHeld(io.github.miam1ku.mibandoplusbridge.notify.NotifyReplay.Held held) {
@@ -574,6 +614,7 @@ public final class BandLiveService extends Service {
         calls = new io.github.miam1ku.mibandoplusbridge.notify.PhoneCallMonitor(this, coordinator);
         io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureEnabled(this);
         instance = this;
+        scheduleHeldExpiry();
         sleepPauseOn = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.enabled(this);
         long armed = io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.armedAt(this);
         if (sleepPauseOn && armed == Long.MAX_VALUE) {
@@ -581,8 +622,6 @@ public final class BandLiveService extends Service {
             io.github.miam1ku.mibandoplusbridge.notify.SleepMusic.rememberCutoff(this, armed);
         }
         sleepArmedAtMs = sleepPauseOn ? armed : Long.MAX_VALUE;
-        coordinator.scheduleAtFixedRate(this::tick, 1, 1, TimeUnit.MINUTES);
-        coordinator.scheduleAtFixedRate(this::expireHeld, 5, 5, TimeUnit.SECONDS);
         try {
             registerReceiver(bluetoothEvents,
                     new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), RECEIVER_EXPORTED);
@@ -636,6 +675,12 @@ public final class BandLiveService extends Service {
         int dropped = HELD_NOTIFICATIONS.failAll(new IllegalStateException("NOTIFICATION_SESSION_UNAVAILABLE"));
         if (dropped > 0) io.github.miam1ku.mibandoplusbridge.data.SessionLog.line(this,
                 "NOTIFY_DROP reason=stopped count=" + dropped);
+        java.util.concurrent.ScheduledFuture<?> maintenance = maintenanceWake;
+        if (maintenance != null) maintenance.cancel(false);
+        maintenanceWake = null;
+        java.util.concurrent.ScheduledFuture<?> expiry = heldExpiryWake;
+        if (expiry != null) expiry.cancel(false);
+        heldExpiryWake = null;
         SppDiagnosticClient active = client;
         if (active != null) active.close();
     }
@@ -727,6 +772,7 @@ public final class BandLiveService extends Service {
                         historySync.request(true);
                         syncDnd();
                         requestSleepState();
+                        scheduleNextMaintenance(System.nanoTime());
                     }), fileId -> coordinator.execute(() -> {
                         if (client == active && !stopRequested && historySync != null) historySync.saved(fileId);
                     }), command -> {
@@ -874,9 +920,9 @@ public final class BandLiveService extends Service {
     }
 
     private void reviveHealth() {
-        HostKeepAlive.startHealthAsync(this, () -> main.post(() -> {
-            if (!stopRequested) bindHealthHost();
-        }));
+        // OHealth is a system-managed host on ColorOS. Do not shell-start or watchdog it.
+        // A later host callback, provider read, or ordinary bind retry will reconnect.
+        healthHostStatus("UNAVAILABLE");
     }
 
     private void healthHostStatus(String status) {
@@ -890,6 +936,7 @@ public final class BandLiveService extends Service {
     }
 
     private void tick() {
+        maintenanceWake = null;
         var queue = commands;
         if (stopRequested || queue == null || historySync == null) return;
         if (!healthBound) bindHealthHost();
@@ -926,6 +973,25 @@ public final class BandLiveService extends Service {
             nextWeatherAt = now + TimeUnit.MINUTES.toNanos(30);
             weatherSync.sendIfChanged();
         }
+        scheduleNextMaintenance(System.nanoTime());
+    }
+
+    /** Schedule only the earliest real deadline. Idle sessions do not wake once a minute. */
+    private void scheduleNextMaintenance(long nowNanos) {
+        if (stopRequested || commands == null || historySync == null) return;
+        long next = syncRequested ? nowNanos
+                : Math.min(nextBatteryAt, Math.min(nextHealthAt, nextWeatherAt));
+        if (sleepPauseOn) next = Math.min(next, nextSleepFileAt);
+        scheduleMaintenance(Math.max(0, next - nowNanos));
+    }
+
+    private void scheduleMaintenance(long delayNanos) {
+        if (stopRequested) return;
+        try {
+            java.util.concurrent.ScheduledFuture<?> previous = maintenanceWake;
+            if (previous != null) previous.cancel(false);
+            maintenanceWake = coordinator.schedule(this::tick, Math.max(0, delayNanos), TimeUnit.NANOSECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException stopping) { }
     }
 
     private static boolean retryable(String code) {
@@ -1150,12 +1216,18 @@ public final class BandLiveService extends Service {
 
     private void show(String title) {
         NotificationManager manager = getSystemService(NotificationManager.class);
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "手环连接", NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "手环连接", NotificationManager.IMPORTANCE_MIN);
         channel.setShowBadge(false);
+        channel.setSound(null, null);
+        channel.enableVibration(false);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
         manager.createNotificationChannel(channel);
         Notification notice = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle(title)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setShowWhen(false)
+                .setVisibility(Notification.VISIBILITY_SECRET)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
                 .build();

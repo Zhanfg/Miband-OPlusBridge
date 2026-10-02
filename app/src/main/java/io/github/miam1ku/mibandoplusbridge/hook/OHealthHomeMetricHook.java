@@ -6,8 +6,6 @@ import android.content.pm.ApplicationInfo;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -44,7 +42,11 @@ public final class OHealthHomeMetricHook {
         if (supplied == null || !HOST.equals(supplied.getPackageName())) return;
         Class<?> base;
         try {
-            base = Class.forName(BASE, false, loader);
+            base = HookResolver.resolveClassByMembers(supplied, loader, BASE, CARD_PREFIX, null,
+                    new String[]{"onCommonBindViewHolder"}, new String[0]);
+            if (!BASE.equals(base.getName())) {
+                Log.i("OplusBandBridge", "OHEALTH_HOME_BASE_ADAPTED " + base.getName());
+            }
         } catch (Throwable failure) {
             Log.i("OplusBandBridge", "OHEALTH_HOME_RELOAD_HOOK_FAIL");
             return;
@@ -59,7 +61,7 @@ public final class OHealthHomeMetricHook {
         Set<String> seen = new HashSet<>();
         for (String apk : apks) {
             try {
-                for (String name : DexAnchors.classNames(apk)) {
+                for (String name : HookResolver.classNames(apk)) {
                     if (!name.startsWith(CARD_PREFIX) || name.indexOf('$') >= 0 || !seen.add(name)) continue;
                     Class<?> type;
                     try {

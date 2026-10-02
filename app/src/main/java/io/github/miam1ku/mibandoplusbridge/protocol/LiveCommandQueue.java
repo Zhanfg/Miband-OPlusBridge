@@ -35,7 +35,7 @@ import nodomain.freeyourgadget.gadgetbridge.proto.xiaomi.XiaomiProto;
  * observable even during a blocked write. Closing the transport itself remains the caller's job;
  * interrupting the writer cannot guarantee that an underlying socket write returns.
  */
-public final class LiveCommandQueue implements AutoCloseable {
+public final class LiveCommandQueue implements CommandTransport, AutoCloseable {
     private static final int CAPACITY = 64;
     private static final int FILE_CAPACITY = 8;
     private static final int CALL_IN_FLIGHT_CAPACITY = 2;
@@ -114,12 +114,12 @@ public final class LiveCommandQueue implements AutoCloseable {
     public long timeoutMillis() { return timeoutMillis; }
 
     /** Completes after the matching transport ACK; this does not prove device-side rendering. */
-    public CompletionStage<Void> send(XiaomiProto.Command command) {
+    @Override public CompletionStage<Void> send(XiaomiProto.Command command) {
         return submit(command, -1, -1).thenApply(ignored -> null);
     }
 
     /** Completes only after both the matching transport ACK and a successful semantic response. */
-    public CompletionStage<XiaomiProto.Command> request(
+    @Override public CompletionStage<XiaomiProto.Command> request(
             XiaomiProto.Command command, int type, int subtype) {
         if (type < 0 || subtype < 0) return failed("LIVE_RESPONSE_KEY_INVALID");
         return submit(command, type, subtype);

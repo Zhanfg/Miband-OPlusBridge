@@ -12,7 +12,14 @@ import android.os.Process;
 import android.os.UserManager;
 import io.github.miam1ku.mibandoplusbridge.HostIdentity;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandHistoryParser.Measurement;
+import io.github.miam1ku.mibandoplusbridge.data.BandStateRepository;
 import io.github.miam1ku.mibandoplusbridge.data.HealthRecordStore;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Set;
 import org.json.JSONObject;
 
 /** Private CE outbox: the signed host can read only its confirmed account's records. */
@@ -96,9 +103,18 @@ public final class HealthQueueProvider extends ContentProvider {
     }
 
     @Override public synchronized Bundle call(String method, String arg, Bundle extras) {
-        boolean self = requireCaller();
+        int uid = Binder.getCallingUid();
+        boolean self = uid == Process.myUid();
+        boolean healthCaller = !self && HostIdentity.uidHas(getContext(), uid, HOST);
+        boolean miCaller = !self && HostIdentity.uidHas(getContext(), uid, HostIdentity.MI_PACKAGE);
+        if (!self && !healthCaller && !miCaller) throw new SecurityException("HEALTH_CALLER_NOT_AUTHORIZED");
         requireUnlocked();
         if (method == null) throw new IllegalArgumentException("UNSUPPORTED_HEALTH_OPERATION");
+        if ("mirrorBatch".equals(method)) {
+            if (!miCaller) throw new SecurityException("MI_FITNESS_CALLER_REQUIRED");
+            return mirrorBatch(extras);
+        }
+        if (miCaller) throw new SecurityException("MI_FITNESS_MIRROR_ONLY");
         switch (method) {
             case "adoptAccount": {
                 if (self || extras == null) throw new SecurityException("OHEALTH_CALLER_REQUIRED");
@@ -223,6 +239,101 @@ public final class HealthQueueProvider extends ContentProvider {
             }
             default:
                 throw new IllegalArgumentException("UNSUPPORTED_HEALTH_OPERATION");
+        }
+    }
+
+    private Bundle mirrorBatch(Bundle extras) {
+        if (extras == null) throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_REQUIRED");
+        String[] sourceKeys = extras.getStringArray("sourceKeys");
+        String[] kinds = extras.getStringArray("kinds");
+        long[] starts = extras.getLongArray("starts");
+        long[] ends = extras.getLongArray("ends");
+        int[] values = extras.getIntArray("values");
+        int[] distances = extras.getIntArray("distances");
+        int[] calories = extras.getIntArray("calories");
+        int[] stages = extras.getIntArray("stages");
+        boolean[] completes = extras.getBooleanArray("completes");
+        String[] timezones = extras.getStringArray("timezones");
+        int size = sourceKeys == null ? -1 : sourceKeys.length;
+        if (size <= 0 || size > 64 || kinds == null || starts == null || ends == null
+                || values == null || distances == null || calories == null || stages == null
+                || completes == null || timezones == null
+                || kinds.length != size || starts.length != size || ends.length != size
+                || values.length != size || distances.length != size || calories.length != size
+                || stages.length != size || completes.length != size || timezones.length != size) {
+            throw new IllegalArgumentException("HEALTH_MIRROR_BATCH_INVALID");
+        }
+
+        String deviceId = new BandStateRepository(getContext()).registeredDeviceId();
+        if (deviceId.isBlank()) return status("DEVICE_NOT_REGISTERED");
+        if (store.confirmedAccountHash() == null) return status("HEALTH_ACCOUNT_UNCONFIRMED");
+
+        ArrayList<Measurement> batch = new ArrayList<>(size);
+        Set<String> supported = Set.of("steps_interval", "heart_rate", "spo2", "stress",
+                "sleep_interval", "sleep_stage");
+        for (int i = 0; i < size; i++) {
+            String source = sourceKeys[i];
+            String kind = kinds[i];
+            if (source == null || source.isBlank() || source.length() > 256 || !supported.contains(kind)
+                    || starts[i] < 0 || ends[i] <= starts[i]) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID");
+            }
+            boolean sleepInterval = "sleep_interval".equals(kind);
+            boolean sleepStage = "sleep_stage".equals(kind);
+            if (!"steps_interval".equals(kind) && !sleepInterval && !sleepStage
+                    && ends[i] - starts[i] != 60_000L) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_INTERVAL_INVALID");
+            }
+            if (sleepStage && (stages[i] < 2 || stages[i] > 5)) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_STAGE_INVALID");
+            }
+            JSONObject row = new JSONObject();
+            try {
+                row.put("recordId", "mi:" + kind + ":" + sha256(source));
+                row.put("deviceId", deviceId);
+                row.put("kind", kind);
+                row.put("startMs", starts[i]);
+                row.put("endMs", ends[i]);
+                row.put("value", sleepInterval || sleepStage ? JSONObject.NULL : values[i]);
+                row.put("stage", sleepStage ? stages[i] : JSONObject.NULL);
+                if (timezones[i] != null && !timezones[i].isBlank()) row.put("timezone", timezones[i]);
+                row.put("measurementMode", sleepInterval || sleepStage ? "sleep" : "continuous");
+                row.put("complete", sleepInterval && completes[i]);
+                if ("steps_interval".equals(kind)) {
+                    if (distances[i] >= 0) row.put("distance", distances[i]);
+                    if (calories[i] >= 0) row.put("calories", calories[i]);
+                }
+                row.put("sourceFingerprint", sha256(kind + "|" + starts[i] + "|" + ends[i]
+                        + "|" + values[i] + "|" + distances[i] + "|" + calories[i]
+                        + "|" + stages[i] + "|" + completes[i] + "|" + timezones[i]));
+                batch.add(Measurement.fromJson(row));
+            } catch (org.json.JSONException invalid) {
+                throw new IllegalArgumentException("HEALTH_MIRROR_RECORD_INVALID", invalid);
+            }
+        }
+
+        HealthRecordStore.BatchResult result = store.enqueueMeasurements(batch);
+        if (result.added() > 0) {
+            notifyRecordsChanged();
+            for (int i = 0; i < size; i++) {
+                if ("sleep_interval".equals(kinds[i])) {
+                    io.github.miam1ku.mibandoplusbridge.service.CoexistControlPlane.onSleepInterval(
+                            getContext(), starts[i], ends[i]);
+                }
+            }
+        }
+        Bundle reply = status(result.added() > 0 ? "HEALTH_MIRRORED" : "HEALTH_MIRROR_UNCHANGED");
+        reply.putInt("added", result.added());
+        reply.putInt("unchanged", result.unchanged());
+        return reply;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) {
+            throw new IllegalStateException("HEALTH_MIRROR_HASH_UNAVAILABLE", impossible);
         }
     }
 

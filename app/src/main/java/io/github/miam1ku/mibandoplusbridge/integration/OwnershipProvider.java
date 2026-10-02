@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package io.github.miam1ku.mibandoplusbridge.integration;
+
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.Process;
+import io.github.miam1ku.mibandoplusbridge.HostIdentity;
+import io.github.miam1ku.mibandoplusbridge.data.LocalPrefs;
+import io.github.miam1ku.mibandoplusbridge.service.OwnershipController;
+
+/**
+ * Minimal ownership IPC used by the module injected into Mi Fitness.
+ * It intentionally exposes no authentication token or health payload.
+ */
+public final class OwnershipProvider extends ContentProvider {
+    public static final Uri URI = Uri.parse("content://io.github.miam1ku.mibandoplusbridge.ownership");
+
+    @Override public boolean onCreate() { return true; }
+
+    @Override public Bundle call(String method, String arg, Bundle extras) {
+        boolean self = Binder.getCallingUid() == Process.myUid();
+        if (!self) HostIdentity.requireMiCaller(getContext());
+        if (!"state".equals(method) && !"hookOnline".equals(method) && !"hookAck".equals(method)) {
+            throw new SecurityException("OWNERSHIP_OPERATION_UNSUPPORTED");
+        }
+        if (!self && ("hookOnline".equals(method) || "hookAck".equals(method))) {
+            var edit = getContext().getSharedPreferences("ownership-hook", 0).edit()
+                    .putLong("lastSeenElapsedMs", android.os.SystemClock.elapsedRealtime());
+            if ("hookOnline".equals(method)) {
+                int api = extras == null ? 0 : extras.getInt("api", 0);
+                long version = extras == null ? 0 : extras.getLong("versionCode", 0);
+                edit.putInt("api", api).putLong("versionCode", version);
+            } else {
+                long generation = extras == null ? -1 : extras.getLong("generation", -1);
+                if (generation >= 0) {
+                    edit.putLong("ackGeneration", generation);
+                    OwnershipController.noteHookAck(generation);
+                }
+            }
+            edit.apply();
+        }
+        LocalPrefs state = LocalPrefs.open(getContext(), "ownership");
+        Bundle result = new Bundle();
+        String mode = state.getString("mode", "OFFICIAL");
+        result.putString("mode", mode);
+        result.putBoolean("native", "NATIVE".equals(mode)
+                && state.getBoolean("hookExclusive", false));
+        result.putBoolean("coexist", "COEXIST".equals(mode)
+                && !state.getBoolean("hookExclusive", false));
+        result.putLong("generation", state.getLong("generation", 0));
+        result.putString("mac", LocalPrefs.open(getContext(), "band-state").getString("mac", ""));
+        var hook = getContext().getSharedPreferences("ownership-hook", 0);
+        result.putInt("hookApi", hook.getInt("api", 0));
+        result.putLong("hookVersionCode", hook.getLong("versionCode", 0));
+        result.putLong("hookLastSeenElapsedMs", hook.getLong("lastSeenElapsedMs", 0));
+        result.putLong("hookAckGeneration", hook.getLong("ackGeneration", -1));
+        return result;
+    }
+
+    @Override public Cursor query(Uri uri, String[] projection, String selection, String[] args, String sort) {
+        throw new SecurityException("OWNERSHIP_CALL_ONLY");
+    }
+    @Override public String getType(Uri uri) { return null; }
+    @Override public Uri insert(Uri uri, ContentValues values) { throw new SecurityException("OWNERSHIP_CALL_ONLY"); }
+    @Override public int update(Uri uri, ContentValues values, String selection, String[] args) {
+        throw new SecurityException("OWNERSHIP_CALL_ONLY");
+    }
+    @Override public int delete(Uri uri, String selection, String[] args) {
+        throw new SecurityException("OWNERSHIP_CALL_ONLY");
+    }
+}

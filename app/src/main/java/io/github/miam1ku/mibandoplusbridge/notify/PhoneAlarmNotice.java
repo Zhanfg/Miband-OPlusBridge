@@ -5,7 +5,7 @@ import android.content.Context;
 import android.service.notification.StatusBarNotification;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandAlarmCommand;
-import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -77,7 +77,7 @@ public final class PhoneAlarmNotice {
         if (shown.length() > 40) shown = shown.substring(0, 40);
         SessionLog.line(context, "ALARM_PHONE op=" + op);
         try {
-            BandLiveService.sendSessionCommand(BandAlarmCommand.operation(op, 1,
+            CoexistProtoRelay.send(context, BandAlarmCommand.operation(op, 1,
                     op == 0 ? (int) (System.currentTimeMillis() / 1000L) : -1, shown));
         } catch (RuntimeException failure) {
             SessionLog.line(context, "ALARM_PHONE_FAILED " + failure.getClass().getSimpleName());

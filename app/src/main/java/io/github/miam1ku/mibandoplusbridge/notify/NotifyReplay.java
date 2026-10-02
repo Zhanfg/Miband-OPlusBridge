@@ -94,6 +94,21 @@ public final class NotifyReplay {
         return ready;
     }
 
+    /**
+     * Milliseconds until the first held item expires, or -1 when the queue is empty.
+     * Called only when the queue changes, so expiration needs no fixed-rate polling.
+     */
+    public synchronized long nextExpiryDelay(long nowMs) {
+        if (pending.isEmpty()) return -1;
+        long delay = Long.MAX_VALUE;
+        for (Held held : pending) {
+            long ttl = held.call ? CALL_MS : NOTIFICATION_MS;
+            long remaining = ttl - Math.max(0, nowMs - held.atMs);
+            delay = Math.min(delay, Math.max(0, remaining));
+        }
+        return delay == Long.MAX_VALUE ? -1 : delay;
+    }
+
     public synchronized int failAll(Throwable error) {
         int count = pending.size();
         for (Held held : pending) held.fail(error);

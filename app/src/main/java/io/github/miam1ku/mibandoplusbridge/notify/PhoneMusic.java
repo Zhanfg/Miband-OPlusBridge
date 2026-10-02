@@ -14,7 +14,7 @@ import android.os.Handler;
 import android.util.Log;
 import io.github.miam1ku.mibandoplusbridge.data.SessionLog;
 import io.github.miam1ku.mibandoplusbridge.protocol.BandMusicCommand;
-import io.github.miam1ku.mibandoplusbridge.service.BandLiveService;
+import io.github.miam1ku.mibandoplusbridge.service.CoexistProtoRelay;
 import java.util.List;
 
 /**
@@ -143,11 +143,11 @@ public final class PhoneMusic {
         int state = playback == null ? 0 : bandState(playback.getState());
         int volume = volumePercent(service);
         String pkg = current == null ? "" : current.getPackageName();
-        if (!BandLiveService.notificationSessionReady(service)) {
+        if (!CoexistProtoRelay.ready(service)) {
             drop("session", pkg, state, volume);
             return;
         }
-        int limit = BandLiveService.notificationPayloadLimit();
+        int limit = CoexistProtoRelay.payloadLimit(service);
         if (limit <= 0) {
             drop("limit", pkg, state, volume);
             return;
@@ -167,7 +167,7 @@ public final class PhoneMusic {
                     ? BandMusicCommand.nothing(volume)
                     : BandMusicCommand.playback(volume, track == null ? "" : track, artist == null ? "" : artist,
                             position, duration, state == 1);
-            BandLiveService.sendSessionCommand(BandMusicCommand.fit(command, limit));
+            CoexistProtoRelay.send(service, BandMusicCommand.fit(command, limit));
             lastState = state;
             lastVolume = volume;
             lastPackage = pkg;

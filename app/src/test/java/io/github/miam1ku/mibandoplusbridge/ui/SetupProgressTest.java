@@ -7,11 +7,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class SetupProgressTest {
-    @Test public void missingRootIsFirstEvenWithBinding() {
+    @Test public void missingHookIsFirstEvenWithBinding() {
         SetupProgress progress = new SetupProgress(false, true, true, false, false, false);
-        assertEquals(SetupProgress.Step.ROOT, progress.current());
+        assertEquals(SetupProgress.Step.LSP, progress.current());
         assertTrue(progress.showChecklist());
-        assertEquals("检查 Root", progress.primaryLabel());
+        assertEquals("验证 LSPosed", progress.primaryLabel());
     }
 
     @Test public void missingBindingIsImportEvenWhenUnregistered() {
@@ -48,18 +48,18 @@ public final class SetupProgressTest {
         assertEquals("添加到健康", progress.primaryLabel());
     }
 
-    @Test public void registeredWithoutAccountIsDone() {
+    @Test public void registeredCoexistWithoutAccountIsDone() {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, false);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
-        assertEquals("立即同步", progress.primaryLabel());
+        assertEquals("同步到 OHealth", progress.primaryLabel());
     }
 
-    @Test public void confirmedAccountHidesChecklist() {
+    @Test public void confirmedAccountHidesChecklistInCoexist() {
         SetupProgress progress = new SetupProgress(true, true, true, true, true, true);
         assertEquals(SetupProgress.Step.DONE, progress.current());
         assertFalse(progress.showChecklist());
-        assertEquals("立即同步", progress.primaryLabel());
+        assertEquals("同步到 OHealth", progress.primaryLabel());
     }
 
     @Test public void missingBindingOutranksRegister() {

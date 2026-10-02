@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,7 +27,43 @@ jobs:
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
-      - name: Unit tests
+      - name: Test and assemble debug APK
         env:
           TZ: Asia/Shanghai
-        run: chmod +x ./gradlew && ./gradlew --no-daemon :app:testDebugUnitTest
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Verify LSPosed 102 package metadata
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          unzip -p "$APK" META-INF/xposed/module.prop | grep -Fx 'targetApiVersion=102'
+          unzip -p "$APK" META-INF/xposed/module.prop | grep -Fx 'autoHotReload=true'
+          unzip -p "$APK" META-INF/xposed/java_init.list             | grep -Fx 'io.github.miam1ku.mibandoplusbridge.hook.EntryPoint'
+          if unzip -Z1 "$APK" | grep -Fx 'assets/xposed_init'; then
+            echo "legacy xposed_init must not be packaged" >&2
+            exit 1
+          fi
+      - name: Reject root-shell and legacy Xposed regressions
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'ProcessBuilder\("su"|pm disable-user|cmd deviceidle|rootStart\(|probeRoot\(' \
+              app/src/main/java app/src/test/java 2>/dev/null; then
+            echo "root-shell compatibility path reintroduced" >&2
+            exit 1
+          fi
+          if grep -R -n -E '^[[:space:]]*import[[:space:]]+de\.robv\.android\.xposed' \
+              app/src/main/java 2>/dev/null \
+              || grep -n 'de\.robv\.android\.xposed:api' app/build.gradle; then
+            echo "legacy Xposed runtime API reintroduced" >&2
+            exit 1
+          fi
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Miband-OPlusBridge-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
