@@ -77,7 +77,7 @@ public final class PhoneAlarmNotice {
         if (shown.length() > 40) shown = shown.substring(0, 40);
         SessionLog.line(context, "ALARM_PHONE op=" + op);
         try {
-            BandLiveService.sendSessionCommand(BandAlarmCommand.operation(op, 1,
+            CoexistProtoRelay.send(context, BandAlarmCommand.operation(op, 1,
                     op == 0 ? (int) (System.currentTimeMillis() / 1000L) : -1, shown));
         } catch (RuntimeException failure) {
             SessionLog.line(context, "ALARM_PHONE_FAILED " + failure.getClass().getSimpleName());
