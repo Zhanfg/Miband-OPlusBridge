@@ -175,6 +175,7 @@ public final class OwnershipController {
                 throw new Failure("OWNERSHIP_STORAGE_FAILED");
             }
             publish();
+            io.github.miam1ku.mibandoplusbridge.notify.BandNotificationListener.ensureDisabled(context);
         } finally {
             GATE.writeLock().unlock();
         }
